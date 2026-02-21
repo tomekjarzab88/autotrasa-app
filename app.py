@@ -21,52 +21,34 @@ COLOR_BG = "#1F293D"
 st.markdown(f"""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-    html, body, [class*="css"] {{
-        font-family: 'Inter', sans-serif;
-        background-color: {COLOR_BG};
-    }}
+    html, body, [class*="css"] {{ font-family: 'Inter', sans-serif; background-color: {COLOR_BG}; color: white; }}
     .stApp {{ background-color: {COLOR_BG}; color: white; }}
-
-    [data-testid="stSidebar"] {{
-        background-color: {COLOR_NAVY_DARK} !important;
-        min-width: 250px !important;
-        max-width: 300px !important;
-    }}
-    
-    [data-testid="stSidebarContent"] {{ padding-top: 1rem !important; }}
-    [data-testid="stSidebarContent"] .stVerticalBlock {{ gap: 0.4rem !important; }}
-    hr {{ margin: 0.5rem 0 !important; opacity: 0.2; }}
-
+    [data-testid="stSidebar"] {{ background-color: {COLOR_NAVY_DARK} !important; min-width: 250px !important; }}
     div[data-testid="stMetric"] {{
-        background-color: white;
-        border-radius: 12px;
-        padding: 15px !important;
-        border-left: 5px solid {COLOR_CYAN};
-        box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        background-color: white; border-radius: 12px; padding: 15px !important;
+        border-left: 5px solid {COLOR_CYAN}; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
     }}
     div[data-testid="stMetric"] label {{ color: #64748B !important; font-weight: 600; }}
     div[data-testid="stMetricValue"] {{ color: {COLOR_NAVY_DARK} !important; font-size: 1.8rem !important; }}
-
     .stButton>button {{
         background: linear-gradient(135deg, {COLOR_CYAN} 0%, #00A0A8 100%) !important;
-        color: white !important;
-        border-radius: 8px !important;
-        font-weight: bold !important;
-        border: none !important;
-        width: 100%;
-        transition: 0.3s;
+        color: white !important; border-radius: 8px !important; font-weight: bold !important; width: 100%;
     }}
-    .stButton>button:hover {{ transform: scale(1.02); box-shadow: 0 0 10px {COLOR_CYAN}80; }}
-
-    .absence-item {{
-        background: rgba(255,255,255,0.05);
-        padding: 5px 10px;
-        border-radius: 5px;
-        margin-bottom: 2px;
-        font-size: 0.85rem;
-    }}
+    .absence-item {{ background: rgba(255,255,255,0.05); padding: 5px 10px; border-radius: 5px; margin-bottom: 2px; font-size: 0.85rem; }}
     </style>
     """, unsafe_allow_html=True)
+
+# --- FUNKCJA NAPRAWCZA DLA POLSKICH ZNAKÓW ---
+def fix_polish_chars(text):
+    if not isinstance(text, str): return text
+    # Mapa najczęstszych błędów kodowania (mojibake)
+    corrections = {
+        'GÛ': 'Gó', 'Û': 'ó', 'ą': 'ą', 'ę': 'ę', 'ś': 'ś', 'ć': 'ć', 'ź': 'ź', 'ż': 'ż', 'ł': 'ł', 'ń': 'ń', 'ó': 'ó',
+        'Ã³': 'ó', 'Ä…': 'ą', 'Ä™': 'ę', 'Å›': 'ś', 'Ä‡': 'ć', 'Åº': 'ź', 'Å¼': 'ż', 'Å‚': 'ł', 'Å„': 'ń'
+    }
+    for wrong, right in corrections.items():
+        text = text.replace(wrong, right)
+    return text
 
 if 'nieobecnosci' not in st.session_state:
     st.session_state.nieobecnosci = []
@@ -88,44 +70,40 @@ with st.sidebar:
     dni_input = st.date_input("Dodaj wolne/urlop:", value=(), min_value=date(2025, 1, 1))
     if st.button("➕ DODAJ DO PLANU"):
         if isinstance(dni_input, (list, tuple)) and len(dni_input) > 0:
-            if len(dni_input) == 2:
-                s, e = dni_input
-                count = (e - s).days + 1
-                label = f"{s.strftime('%d.%m')} - {e.strftime('%d.%m')}"
-            else:
-                count = 1
-                label = f"{dni_input[0].strftime('%d.%m')}"
+            label = f"{dni_input[0].strftime('%d.%m')}" if len(dni_input)==1 else f"{dni_input[0].strftime('%d.%m')} - {dni_input[1].strftime('%d.%m')}"
+            count = 1 if len(dni_input)==1 else (dni_input[1]-dni_input[0]).days + 1
             st.session_state.nieobecnosci.append({'label': label, 'count': count})
             st.rerun()
 
     suma_wolnych = sum(g['count'] for g in st.session_state.nieobecnosci)
-    if st.session_state.nieobecnosci:
-        st.markdown(f"<p style='font-size:0.8rem; color:{COLOR_CYAN}'>PLANOWANE WOLNE ({suma_wolnych} dni):</p>", unsafe_allow_html=True)
-        for i, g in enumerate(st.session_state.nieobecnosci):
-            c1, c2 = st.columns([5, 1])
-            c1.markdown(f"<div class='absence-item'>🏝️ {g['label']}</div>", unsafe_allow_html=True)
-            if c2.button("✕", key=f"del_{i}"):
-                st.session_state.nieobecnosci.pop(i)
-                st.rerun()
+    for i, g in enumerate(st.session_state.nieobecnosci):
+        c1, c2 = st.columns([5, 1])
+        c1.markdown(f"<div class='absence-item'>🏝️ {g['label']}</div>", unsafe_allow_html=True)
+        if c2.button("✕", key=f"del_{i}"):
+            st.session_state.nieobecnosci.pop(i); st.rerun()
 
 # --- PANEL GŁÓWNY ---
-st.markdown(f"""
-    <div style='display: flex; justify-content: space-between; align-items: center;'>
-        <h1 style='margin:0;'>Dashboard A2B FlowRoute</h1>
-        <div style='background:{COLOR_CYAN}; color:white; padding:5px 15px; border-radius:20px; font-weight:bold;'>PRO v7.7</div>
-    </div>
-    <p style='color:#8A9AB8; margin-top:0;'>Optymalizacja trasy dla Przedstawicieli</p>
-    """, unsafe_allow_html=True)
+st.markdown(f"<h1 style='margin:0;'>Dashboard A2B FlowRoute</h1><p style='color:#8A9AB8;'>v7.8 | Stabilizacja znaków PL</p>", unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("📂 Wgraj bazę klientów (CSV)", type=["csv"])
 
 if uploaded_file:
+    # INTELIGENTNE CZYTANIE PLIKU
     raw_data = uploaded_file.read()
-    charenc = chardet.detect(raw_data)['encoding']
+    detection = chardet.detect(raw_data)
+    encoding_guess = detection['encoding']
     uploaded_file.seek(0)
     
     try:
-        df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=charenc)
+        # Próbujemy najpierw utf-8-sig (Excel), potem to co zgadł chardet, na końcu windows-1250
+        try:
+            df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding='utf-8-sig')
+        except:
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=encoding_guess)
+            
+        # NAPRAWA ZNAKÓW W CAŁEJ TABELI
+        df = df.applymap(fix_polish_chars)
         
         dni_p = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
         dni_n = max(0, dni_p[typ_cyklu] - suma_wolnych)
@@ -145,16 +123,10 @@ if uploaded_file:
         cl, cr = st.columns([2, 1])
         with cl:
             fig = go.Figure(go.Indicator(
-                mode = "gauge+number",
-                value = srednia,
+                mode = "gauge+number", value = srednia,
                 number = {'font': {'color': COLOR_CYAN}},
-                title = {'text': "WYMAGANE TEMPO (WIZYTY/DZIEŃ)", 'font': {'color': 'white', 'size': 16}},
-                gauge = {
-                    'axis': {'range': [None, 30], 'tickcolor': "white"},
-                    'bar': {'color': COLOR_CYAN},
-                    'bgcolor': "rgba(255,255,255,0.1)",
-                    'threshold': {'line': {'color': "red", 'width': 4}, 'value': tempo}
-                }
+                title = {'text': "WYMAGANE TEMPO", 'font': {'color': 'white', 'size': 16}},
+                gauge = {'axis': {'range': [None, 30]}, 'bar': {'color': COLOR_CYAN}, 'threshold': {'line': {'color': "red", 'width': 4}, 'value': tempo}}
             ))
             fig.update_layout(height=350, paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig, use_container_width=True)
@@ -163,75 +135,54 @@ if uploaded_file:
             st.markdown(f"<div style='background:rgba(255,255,255,0.05); padding:20px; border-radius:15px; border:1px solid {COLOR_CYAN}40;'>", unsafe_allow_html=True)
             st.subheader("💡 Wskazówki")
             if srednia > tempo:
-                st.error(f"⚠️ Musisz przyspieszyć! Wymagane tempo ({round(srednia,1)}) jest wyższe niż Twój plan ({tempo}).")
+                st.error(f"⚠️ Wymagane tempo ({round(srednia,1)}) > Twój plan ({tempo}).")
             else:
-                st.success(f"✅ Świetne tempo! Masz zapas czasu. Możesz zrealizować dodatkowe {int((tempo * dni_n) - do_zrobienia)} wizyt.")
+                st.success(f"✅ Zapas czasu: {int((tempo * dni_n) - do_zrobienia)} wizyt.")
             st.markdown("</div>", unsafe_allow_html=True)
 
         st.write("---")
-        st.subheader("📍 Twoje punkty na mapie")
+        st.subheader("📍 Mapa Operacyjna")
         
         col_m = next((c for c in df.columns if 'miasto' in c.lower() or 'miejscowość' in c.lower()), None)
         col_u = next((c for c in df.columns if 'ulica' in c.lower() or 'adres' in c.lower()), None)
 
         if col_m and col_u:
-            if st.button("🌍 GENERUJ MAPĘ PUNKTÓW"):
-                with st.spinner("Inicjalizacja inteligentnego geokodowania..."):
-                    # Dynamiczny User-Agent, aby uniknąć blokad
-                    ua = f"A2B_FlowRoute_User_{random.randint(1000, 9999)}"
+            if st.button("🌍 GENERUJ MAPĘ"):
+                with st.spinner("Geolokalizacja w toku..."):
+                    ua = f"A2B_Flow_Fix_{random.randint(1,100)}"
                     geolocator = Nominatim(user_agent=ua, timeout=10)
-                    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
+                    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
                     
                     m = folium.Map(location=[52.0, 19.0], zoom_start=6, tiles="cartodbpositron")
+                    found = 0
                     
-                    found_points = 0
-                    test_limit = 10 # Bierzemy 10 na test, żeby sprawdzić czy w ogóle działa
+                    progress_bar = st.progress(0)
+                    points_to_map = df.head(15) # Testowo 15 punktów
                     
-                    progress_text = st.empty()
-                    
-                    for i, row in df.head(test_limit).iterrows():
+                    for i, row in points_to_map.iterrows():
                         city = str(row[col_m]).strip()
                         street = str(row[col_u]).strip()
-                        
-                        # Próba 1: Pełny adres
                         full_address = f"{street}, {city}, Polska"
-                        progress_text.text(f"Sprawdzam: {full_address}...")
                         
                         loc = geocode(full_address)
-                        
-                        # Próba 2: Sam adres bez numeru lokalu (jeśli jest np. "Ulica 12/4")
-                        if not loc and "/" in street:
-                            simplified_street = street.split("/")[0]
-                            progress_text.text(f"Próba uproszczona: {simplified_street}, {city}...")
-                            loc = geocode(f"{simplified_street}, {city}, Polska")
-                        
                         if loc:
                             folium.CircleMarker(
-                                location=[loc.latitude, loc.longitude],
-                                radius=8,
-                                color=COLOR_CYAN,
-                                fill=True,
-                                fill_color=COLOR_CYAN,
+                                location=[loc.latitude, loc.longitude], radius=8,
+                                color=COLOR_CYAN, fill=True, fill_color=COLOR_CYAN,
                                 popup=f"<b>{street}</b><br>{city}"
                             ).add_to(m)
-                            found_points += 1
-                        
-                        time.sleep(0.5) # Dodatkowy bufor bezpieczeństwa
-
-                    progress_text.empty()
+                            found += 1
+                        progress_bar.progress((i + 1) / len(points_to_map))
                     
-                    if found_points > 0:
+                    if found > 0:
                         st_folium(m, width=1300, height=500)
-                        st.success(f"Sukces! Naniesiono {found_points} z {test_limit} testowych punktów.")
+                        st.success(f"Zlokalizowano {found} punktów!")
                     else:
-                        st.error("Nadal nie mogę znaleźć adresów. Możliwe przyczyny:")
-                        st.write("1. Plik CSV ma błędne nazwy miast/ulic.")
-                        st.write("2. Serwer geolokalizacji tymczasowo odmawia dostępu (spróbuj za 5 min).")
-                        st.write(f"Przykładowy szukany adres: {street}, {city}, Polska")
+                        st.error(f"Błąd! Nie znaleziono adresu: {full_address}. Sprawdź czy miasto i ulica są w osobnych kolumnach.")
         else:
-            st.warning("Nie znaleziono kolumn adresowych.")
+            st.warning("Brak kolumn adresowych.")
 
     except Exception as e:
-        st.error(f"Błąd przetwarzania: {e}")
+        st.error(f"Błąd: {e}")
 else:
-    st.info("👋 Wgraj plik CSV, aby rozpocząć.")
+    st.info("👋 Wgraj plik CSV.")
