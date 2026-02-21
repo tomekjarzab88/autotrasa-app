@@ -34,7 +34,7 @@ with col3:
     st.metric("Realizacja Planu", f"{round(realizacja, 1)}%", delta=f"{round(realizacja-100, 1)}%")
 
 # WGRYWANIE PLIKU
-uploaded_file = st.file_file_uploader("Wgraj plik CSV z Farmaprom", type=["csv"])
+uploaded_file = st.file_uploader("Wgraj plik CSV z Farmaprom", type=["csv"])
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
