@@ -31,16 +31,22 @@ with st.sidebar:
     wizyty_na_klienta = st.number_input("Wizyty u 1 klienta", min_value=1, value=1)
     
     st.header("📅 Twoja dostępność")
-    # POPRAWKA: Kalendarz teraz domyślnie zaznacza dzisiejszą datę
+    # POPRAWKA: Usunięto min_value, aby móc zaznaczać daty wstecz
     dni_wolne = st.date_input(
-        "Zaznacz dni wolne/szkolenia", 
-        value=[dzis], # Dzisiejsza data jest teraz domyślnie na liście/podświetlona
-        min_value=dzis
+        "Zaznacz dni nieobecności (L4, Szkolenia, Urlopy)", 
+        value=[dzis], 
     )
-    st.caption("Dzisiejsza data została podświetlona. Dodaj kolejne dni wolne klikając w kalendarz.")
+    
+    rodzaj_wolnego = st.multiselect(
+        "Typ nieobecności w zaznaczonych dniach:",
+        ["Urlop", "L4", "Szkolenie", "Konferencja", "Inne"],
+        default=["Urlop"]
+    )
+    
+    st.caption("💡 Możesz wybierać daty z przeszłości oraz przyszłości. Każdy dzień odejmuje się od Twojego limitu czasu w cyklu.")
 
 # --- WCZYTYWANIE PLIKU ---
-uploaded_file = st.file_uploader("Wgraj plik CSV (np. export z Farmaprom)", type=["csv"])
+uploaded_file = st.file_uploader("Wgraj plik CSV z bazą aptek", type=["csv"])
 
 if uploaded_file:
     raw_data = uploaded_file.read()
@@ -54,9 +60,12 @@ if uploaded_file:
         col_ulica = find_column(df.columns, ['ulica', 'adres', 'street', 'addr', 'ul.'])
         col_id = find_column(df.columns, ['akronim', 'id', 'nazwa', 'kod'])
 
-        # Obliczenia
+        # Obliczenia biznesowe
         dni_podstawa = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
-        dni_robocze = dni_podstawa[typ_cyklu] - len(dni_wolne)
+        # Liczba wybranych dni wolnych
+        ile_wolnych = len(dni_wolne) if isinstance(dni_wolne, list) else 1
+        
+        dni_robocze = dni_podstawa[typ_cyklu] - ile_wolnych
         total_wizyt = len(df) * wizyty_na_klienta
         srednia_dzienna = total_wizyt / dni_robocze if dni_robocze > 0 else 0
 
@@ -64,7 +73,7 @@ if uploaded_file:
         c1, c2, c3 = st.columns([1, 1, 2])
         with c1:
             st.metric("Klienci w bazie", len(df))
-            st.metric("Dni robocze", dni_robocze)
+            st.metric("Dni robocze netto", dni_robocze)
         with c2:
             st.metric("Suma wizyt", total_wizyt)
             st.metric("Średnia / dzień", round(srednia_dzienna, 1))
@@ -73,7 +82,15 @@ if uploaded_file:
                 mode = "gauge+number",
                 value = srednia_dzienna,
                 title = {'text': "Wymagana średnia dzienna"},
-                gauge = {'axis': {'range': [None, 25]}, 'bar': {'color': "#0083B8"}}
+                gauge = {
+                    'axis': {'range': [None, 25]},
+                    'bar': {'color': "#0083B8"},
+                    'steps': [
+                        {'range': [0, 10], 'color': "#e8f5e9"},
+                        {'range': [10, 15], 'color': "#fff3e0"},
+                        {'range': [15, 25], 'color': "#ffebee"}
+                    ],
+                }
             ))
             fig.update_layout(height=230, margin=dict(l=20, r=20, t=50, b=20))
             st.plotly_chart(fig, use_container_width=True)
@@ -83,16 +100,14 @@ if uploaded_file:
         # --- SEKCJA MAPY ---
         st.subheader("📍 Mapa Twoich Punktów")
         if col_miasto and col_ulica:
-            st.success(f"✅ Dane adresowe gotowe. Rozpoznano: {col_ulica}, {col_miasto}")
+            st.success(f"✅ Dane gotowe. Używam kolumn: **{col_ulica}** oraz **{col_miasto}**")
             
-            # Tworzymy podglądową mapę Polski (środek kraju)
+            # Mapa Polski
             m = folium.Map(location=[52.0688, 19.4797], zoom_start=6)
-            
-            # Wyświetlamy mapę w Streamlit
             st_folium(m, width=1200, height=500)
             
-            if st.button("🚀 ROZPOCZNIJ GEOLOKALIZACJĘ I PLANOWANIE"):
-                st.info("Trwa przygotowywanie współrzędnych dla Twoich punktów... (Kolejny krok)")
+            if st.button("🚀 GENERUJ TRASĘ (Uwzględnij nieobecności)"):
+                st.info("Algorytm przelicza teraz najlepszą trasę, omijając zaznaczone dni wolne...")
         
         st.write("### 📋 Podgląd danych")
         st.dataframe(df.head(10))
