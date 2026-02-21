@@ -8,7 +8,7 @@ import folium
 
 st.set_page_config(page_title="AutoTrasa - Planer Cyklu", layout="wide")
 
-# --- INICJALIZACJA STANU SESJI DLA DNI WOLNYCH ---
+# --- INICJALIZACJA STANU SESJI ---
 if 'dni_wolne_lista' not in st.session_state:
     st.session_state.dni_wolne_lista = []
 
@@ -28,36 +28,51 @@ st.title("🚚 AutoTrasa / FromAtoB")
 with st.sidebar:
     st.header("⚙️ Konfiguracja Cyklu")
     
-    # 1. PARAMETRY CYKLU
     typ_cyklu = st.selectbox("Długość cyklu", ["Miesiąc", "2 Miesiące", "Kwartał"])
     wizyty_na_klienta = st.number_input("Ile wizyt u 1 klienta?", min_value=1, value=1)
     limit_dzienny = st.slider("🎯 Twój limit wizyt / dzień", 1, 30, 12)
     
     st.write("---")
-    st.header("📅 Zarządzanie nieobecnościami")
+    st.header("📈 Postęp Cyklu")
+    wizyty_wykonane = st.number_input("Ile wizyt już ZROBIONO?", min_value=0, value=0)
     
-    # 2. DODAWANIE DNI WOLNYCH
-    data_do_dodania = st.date_input("Wybierz datę:", value=date.today())
-    if st.button("➕ Dodaj ten dzień do listy"):
-        if data_do_dodania not in st.session_state.dni_wolne_lista:
-            st.session_state.dni_wolne_lista.append(data_do_dodania)
-            st.rerun()
+    st.write("---")
+    st.header("📅 Nieobecności")
+    
+    # KALENDARZ ZAKRESOWY (można zaznaczyć wiele dni)
+    wybrane_w_kalendarzu = st.date_input(
+        "Zaznacz dni lub zakresy:",
+        value=[],
+        min_value=date(2025, 1, 1)
+    )
+    
+    if st.button("➕ Dodaj zaznaczone do listy"):
+        if isinstance(wybrane_w_kalendarzu, list):
+            for d in wybrane_w_kalendarzu:
+                if d not in st.session_state.dni_wolne_lista:
+                    st.session_state.dni_wolne_lista.append(d)
+        elif wybrane_w_kalendarzu:
+            if wybrane_w_kalendarzu not in st.session_state.dni_wolne_lista:
+                st.session_state.dni_wolne_lista.append(wybrane_w_kalendarzu)
+        st.rerun()
 
-    # 3. LISTA I USUWANIE DNI
+    # LISTA ZARZĄDZALNA
     if st.session_state.dni_wolne_lista:
-        st.write("**Lista zaplanowanych wolnych:**")
+        st.write("**Lista wolnych dni:**")
         for i, d in enumerate(sorted(st.session_state.dni_wolne_lista)):
-            col_date, col_btn = st.columns([3, 1])
-            col_date.write(f"• {d.strftime('%d.%m.%Y')}")
-            if col_btn.button("❌", key=f"del_{i}"):
+            col_d, col_b = st.columns([3, 1])
+            col_d.write(f"• {d.strftime('%d.%m')}")
+            if col_b.button("❌", key=f"del_{i}"):
                 st.session_state.dni_wolne_lista.remove(d)
                 st.rerun()
+        if st.button("🗑️ Wyczyść wszystko"):
+            st.session_state.dni_wolne_lista = []
+            st.rerun()
     
     ile_wolnych = len(st.session_state.dni_wolne_lista)
-    st.write(f"**Suma dni wolnych: {ile_wolnych}**")
 
 # --- WCZYTYWANIE PLIKU ---
-uploaded_file = st.file_uploader("Wgraj plik CSV z bazą klientów", type=["csv"])
+uploaded_file = st.file_uploader("Wgraj plik CSV", type=["csv"])
 
 if uploaded_file:
     raw_data = uploaded_file.read()
@@ -67,35 +82,36 @@ if uploaded_file:
     try:
         df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=charenc)
         
-        # OBLICZENIA MATEMATYCZNE
+        # OBLICZENIA Z UWZGLĘDNIENIEM POSTĘPU
         dni_podstawa = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
-        dni_robocze = dni_podstawa[typ_cyklu] - ile_wolnych
-        total_wizyt_cel = len(df) * wizyty_na_klienta
-        twoja_wydajnosc_suma = limit_dzienny * dni_robocze
+        dni_robocze = max(0, dni_podstawa[typ_cyklu] - ile_wolnych)
         
-        realizacja_procent = (twoja_wydajnosc_suma / total_wizyt_cel * 100) if total_wizyt_cel > 0 else 0
-        wymagana_srednia = total_wizyt_cel / dni_robocze if dni_robocze > 0 else 0
+        total_wizyt_cel = len(df) * wizyty_na_klienta
+        do_zrobienia = max(0, total_wizyt_cel - wizyty_wykonane)
+        
+        wydajnosc_pozostala = limit_dzienny * dni_robocze
+        realizacja = (wydajnosc_pozostala / do_zrobienia * 100) if do_zrobienia > 0 else 100
+        wymagana_srednia = do_zrobienia / dni_robocze if dni_robocze > 0 else 0
 
-        # --- GŁÓWNY DASHBOARD ---
+        # --- DASHBOARD ---
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Klienci", len(df))
-        m2.metric("Dni netto", max(0, dni_robocze))
-        m3.metric("Wizyty (Cel)", total_wizyt_cel)
+        m2.metric("Pozostałe dni robocze", dni_robocze)
+        m3.metric("Pozostało wizyt", do_zrobienia)
         
-        diff = round(realizacja_procent - 100, 1)
-        m4.metric("Realizacja Planu", f"{round(realizacja_procent, 1)}%", delta=f"{diff}%")
+        procent_ukonczenia = (wizyty_wykonane / total_wizyt_cel * 100) if total_wizyt_cel > 0 else 0
+        m4.metric("Zaawansowanie cyklu", f"{round(procent_ukonczenia, 1)}%")
 
-        # --- WYKRES ---
+        # --- ANALIZA ---
         c_left, c_right = st.columns([2, 1])
         with c_left:
             fig = go.Figure(go.Indicator(
-                mode = "gauge+number+delta",
+                mode = "gauge+number",
                 value = wymagana_srednia,
-                delta = {'reference': limit_dzienny, 'increasing': {'color': "red"}, 'decreasing': {'color': "green"}},
-                title = {'text': "Wymagana średnia vs Twój limit"},
+                title = {'text': "Wymagana średnia (na pozostałe dni)"},
                 gauge = {
                     'axis': {'range': [None, 30]},
-                    'bar': {'color': "#0083B8"},
+                    'bar': {'color': "#FF4B4B" if wymagana_srednia > limit_dzienny else "#0083B8"},
                     'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': limit_dzienny}
                 }
             ))
@@ -103,18 +119,20 @@ if uploaded_file:
             st.plotly_chart(fig, use_container_width=True)
         
         with c_right:
-            st.write("### 📝 Analiza")
-            if realizacja_procent < 100:
-                brakuje = int(total_wizyt_cel - twoja_wydajnosc_suma)
-                st.error(f"Zabraknie Ci **{max(0, brakuje)}** wizyt.")
+            st.write("### 📝 Status operacyjny")
+            if wymagana_srednia > limit_dzienny:
+                st.error(f"Musisz zwiększyć limit do **{round(wymagana_srednia, 1)}**, żeby zdążyć.")
             else:
-                zapas = int(twoja_wydajnosc_suma - total_wizyt_cel)
-                st.success(f"Masz **{max(0, zapas)}** wizyt zapasu.")
+                zapas = int(wydajnosc_suma - do_zrobienia) if 'wydajnosc_suma' in locals() else 0
+                st.success("Twój limit dzienny jest wystarczający.")
+            
+            st.info(f"Suma wizyt w całym cyklu: {total_wizyt_cel}")
 
         st.write("---")
-        st.subheader("📍 Mapa (Podgląd)")
+        st.subheader("📍 Mapa i Dane")
         m = folium.Map(location=[52.0688, 19.4797], zoom_start=6)
         st_folium(m, width=1100, height=400)
+        st.dataframe(df.head(10))
 
     except Exception as e:
         st.error(f"Błąd: {e}")
