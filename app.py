@@ -10,7 +10,6 @@ from geopy.extra.rate_limiter import RateLimiter
 import time
 import random
 import re
-import io
 
 # --- KONFIGURACJA ---
 st.set_page_config(page_title="A2B FlowRoute PRO", layout="wide", initial_sidebar_state="expanded")
@@ -39,6 +38,14 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
+# --- INICJALIZACJA PAMIĘCI SESJI ---
+if 'nieobecnosci' not in st.session_state:
+    st.session_state.nieobecnosci = []
+if 'mapa_wygenerowana' not in st.session_state:
+    st.session_state.mapa_wygenerowana = False
+if 'punkty_mapy' not in st.session_state:
+    st.session_state.punkty_mapy = None
+
 # --- FUNKCJA CZYSZCZENIA ADRESU ---
 def clean_address(text):
     if not isinstance(text, str): return ""
@@ -47,9 +54,6 @@ def clean_address(text):
         text = text.replace(k, v)
     text = re.sub(r'[^\w\s,.-]', '', text)
     return text.strip()
-
-if 'nieobecnosci' not in st.session_state:
-    st.session_state.nieobecnosci = []
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -86,6 +90,7 @@ uploaded_file = st.file_uploader("📂 Wgraj bazę (Excel .xlsx lub CSV)", type=
 
 if uploaded_file:
     try:
+        # Odczyt pliku
         if uploaded_file.name.endswith('.csv'):
             raw_data = uploaded_file.read()
             detection = chardet.detect(raw_data)
@@ -96,6 +101,7 @@ if uploaded_file:
         
         df = df.applymap(clean_address)
         
+        # Metryki
         dni_p = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
         dni_n = max(0, dni_p[typ_cyklu] - suma_wolnych)
         cel_total = len(df) * wizyty_cel
@@ -110,30 +116,27 @@ if uploaded_file:
         m4.metric("Realizacja", f"{round((zrobione/cel_total*100),1)}%" if cel_total>0 else "0%")
 
         st.write("---")
-        st.subheader("📍 Mapa i Planowanie")
+        st.subheader("📍 Mapa Operacyjna")
         
         col_m = next((c for c in df.columns if 'miasto' in c.lower() or 'miejscowość' in c.lower()), None)
         col_u = next((c for c in df.columns if 'ulica' in c.lower() or 'adres' in c.lower()), None)
 
         if col_m and col_u:
-            if st.button("🌍 GENERUJ MAPĘ (TEST 10 PUNKTÓW)"):
-                with st.spinner("Przeszukiwanie bazy..."):
-                    ua = f"A2B_Final_Fix_{random.randint(1,999)}"
+            # Przycisk zmienia stan w pamięci sesji
+            if st.button("🌍 GENERUJ / ODŚWIEŻ MAPĘ"):
+                with st.spinner("Szukanie adresów..."):
+                    ua = f"A2B_Final_{random.randint(1,999)}"
                     geolocator = Nominatim(user_agent=ua, timeout=10)
                     geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
                     
                     m = folium.Map(location=[52.0, 19.0], zoom_start=6, tiles="cartodbpositron")
+                    
+                    test_df = df.head(15).copy()
                     found = 0
-                    
-                    debug_area = st.expander("🔍 Podgląd przetwarzania adresów")
-                    test_df = df.head(10).copy()
-                    
                     for i, row in test_df.iterrows():
                         city = str(row[col_m]).strip()
                         street = str(row[col_u]).strip()
                         addr = f"{street}, {city}, Polska"
-                        debug_area.write(f"Sprawdzam: {addr}")
-                        
                         loc = geocode(addr)
                         
                         if not loc and ' ' in street:
@@ -147,14 +150,27 @@ if uploaded_file:
                                 popup=f"<b>{street}</b><br>{city}"
                             ).add_to(m)
                             found += 1
-                        
-                    if found > 0:
-                        st_folium(m, width=1300, height=500)
-                        st.success(f"Sukces! Naniesiono {found} punktów.")
-                    else:
-                        st.error("Nadal brak wyników. Sprawdź 'Podgląd przetwarzania'.")
+                    
+                    # Zapisujemy mapę do sesji
+                    st.session_state.punkty_mapy = m
+                    st.session_state.mapa_wygenerowana = True
+                    if found == 0:
+                        st.warning("Nie znaleziono żadnego adresu na mapie.")
+
+            # Jeśli mapa jest w pamięci, wyświetl ją (niezależnie od kliknięcia przycisku)
+            if st.session_state.mapa_wygenerowana and st.session_state.punkty_mapy:
+                st_folium(st.session_state.punkty_mapy, width=1300, height=500, key="mapa_glowna")
+                if st.button("🗑️ UKRYJ MAPĘ"):
+                    st.session_state.mapa_wygenerowana = False
+                    st.rerun()
+
         else:
-            st.warning("Nie znaleziono kolumn Miasto/Ulica.")
+            st.warning("Nie znaleziono kolumn adresowych.")
 
     except Exception as e:
         st.error(f"Błąd: {e}")
+else:
+    # Resetuj stan mapy po usunięciu pliku
+    st.session_state.mapa_wygenerowana = False
+    st.session_state.punkty_mapy = None
+    st.info("👋 Wgraj plik Excel lub CSV.")
