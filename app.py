@@ -42,7 +42,6 @@ st.markdown(f"""
 # --- FUNKCJA CZYSZCZENIA ADRESU ---
 def clean_address(text):
     if not isinstance(text, str): return ""
-    # Naprawa błędów kodowania (na wypadek gdyby CSV nadal był używany)
     rep = {'GÛ': 'Gó', 'Û': 'ó', 'Ã³': 'ó', 'Ä…': 'ą', 'Ä™': 'ę', 'Å›': 'ś', 'Ä‡': 'ć', 'Åº': 'ź', 'Å¼': 'ż', 'Å‚': 'ł', 'Å„': 'ń'}
     for k, v in rep.items():
         text = text.replace(k, v)
@@ -83,7 +82,6 @@ with st.sidebar:
 # --- PANEL GŁÓWNY ---
 st.markdown(f"<h1 style='margin:0;'>Dashboard A2B FlowRoute</h1>", unsafe_allow_html=True)
 
-# Obsługa plików Excel i CSV
 uploaded_file = st.file_uploader("📂 Wgraj bazę (Excel .xlsx lub CSV)", type=["csv", "xlsx", "xls"])
 
 if uploaded_file:
@@ -94,13 +92,10 @@ if uploaded_file:
             uploaded_file.seek(0)
             df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=detection['encoding'] if detection['confidence'] > 0.5 else 'utf-8-sig')
         else:
-            # Wczytywanie Excela
             df = pd.read_excel(uploaded_file)
         
-        # Automatyczne czyszczenie całej tabeli z "krzaków"
         df = df.applymap(clean_address)
         
-        # Obliczenia
         dni_p = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
         dni_n = max(0, dni_p[typ_cyklu] - suma_wolnych)
         cel_total = len(df) * wizyty_cel
@@ -122,10 +117,10 @@ if uploaded_file:
 
         if col_m and col_u:
             if st.button("🌍 GENERUJ MAPĘ (TEST 10 PUNKTÓW)"):
-                with st.spinner("Szukam Twoich klientów w bazie..."):
-                    ua = f"A2B_Flow_Final_{random.randint(1,999)}"
+                with st.spinner("Przeszukiwanie bazy..."):
+                    ua = f"A2B_Final_Fix_{random.randint(1,999)}"
                     geolocator = Nominatim(user_agent=ua, timeout=10)
-                    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
+                    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
                     
                     m = folium.Map(location=[52.0, 19.0], zoom_start=6, tiles="cartodbpositron")
                     found = 0
@@ -136,18 +131,14 @@ if uploaded_file:
                     for i, row in test_df.iterrows():
                         city = str(row[col_m]).strip()
                         street = str(row[col_u]).strip()
-                        
-                        # Próba 1: Pełny adres
                         addr = f"{street}, {city}, Polska"
-                        debug_area.write(f"Przetwarzam: {addr}")
+                        debug_area.write(f"Sprawdzam: {addr}")
                         
                         loc = geocode(addr)
                         
-                        # Backup: Jeśli nie znalazł numeru, szukaj samej ulicy
                         if not loc and ' ' in street:
                             street_only = street.rsplit(' ', 1)[0]
                             loc = geocode(f"{street_only}, {city}, Polska")
-                            debug_area.write(f"Backup (sama ulica): {street_only}, {city}")
 
                         if loc:
                             folium.CircleMarker(
@@ -161,11 +152,9 @@ if uploaded_file:
                         st_folium(m, width=1300, height=500)
                         st.success(f"Sukces! Naniesiono {found} punktów.")
                     else:
-                        st.error("Nadal brak wyników. Sprawdź 'Podgląd przetwarzania' powyżej.")
+                        st.error("Nadal brak wyników. Sprawdź 'Podgląd przetwarzania'.")
         else:
             st.warning("Nie znaleziono kolumn Miasto/Ulica.")
 
     except Exception as e:
         st.error(f"Błąd: {e}")
-else:
-    st.info("👋 Wgraj plik Excel lub CSV.")
