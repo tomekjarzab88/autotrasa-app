@@ -31,32 +31,32 @@ with st.sidebar:
     wizyty_na_klienta = st.number_input("Ile wizyt u 1 klienta w cyklu?", min_value=1, value=1)
     
     st.header("📅 Twoja dostępność")
-    # Kalendarz z obsługą wielu dat
+    # Kalendarz
     dni_wolne = st.date_input(
         "Zaznacz dni nieobecności (L4, Szkolenia, Urlopy)", 
         value=[dzis],
         min_value=date(2025, 1, 1)
     )
     
-    # --- POPRAWKA LOGIKI WYŚWIETLANIA DAT ---
-    ile_wolnych = 0
+    # --- PANCERNA LOGIKA WYŚWIETLANIA DAT ---
+    lista_dat = []
     if dni_wolne:
+        # Konwertujemy wszystko na listę, żeby pętla zawsze działała
+        if isinstance(dni_wolne, list):
+            lista_dat = dni_wolne
+        elif isinstance(dni_wolne, (date, datetime)):
+            lista_dat = [dni_wolne]
+        
         st.write("---")
         st.subheader("🗓️ Zarejestrowane dni:")
-        
-        # Jeśli użytkownik wybrał kilka dat (lista)
-        if isinstance(dni_wolne, (list, tuple)):
-            for d in sorted(dni_wolne):
+        for d in sorted(lista_dat):
+            # Sprawdzamy czy element listy jest faktycznie datą (Streamlit czasem wysyła puste zakresy)
+            if isinstance(d, (date, datetime)):
                 prefix = "🔴" if d < dzis else "🔵"
                 st.write(f"{prefix} {d.strftime('%d.%m.%Y')}")
-            ile_wolnych = len(dni_wolne)
-        # Jeśli użytkownik wybrał tylko jedną datę (pojedynczy obiekt date)
-        else:
-            prefix = "🔴" if dni_wolne < dzis else "🔵"
-            st.write(f"{prefix} {dni_wolne.strftime('%d.%m.%Y')}")
-            ile_wolnych = 1
-            
-        st.write(f"**Suma dni wolnych: {ile_wolnych}**")
+    
+    ile_wolnych = len(lista_dat)
+    st.write(f"**Suma dni wolnych: {ile_wolnych}**")
 
 # --- WCZYTYWANIE PLIKU ---
 uploaded_file = st.file_uploader("Wgraj plik CSV z bazą klientów", type=["csv"])
@@ -121,7 +121,7 @@ if uploaded_file:
             st.write("### 📝 Analiza")
             if realizacja_procent < 100:
                 brakuje = int(total_wizyt_do_zrobienia - twoja_wydajnosc_suma)
-                st.error(f"Przy limicie {limit_dzienny} wizyt/dzień, zabraknie Ci **{max(0, brakuje)}** wizyt.")
+                st.error(f"Zabraknie Ci **{max(0, brakuje)}** wizyt.")
             else:
                 zapas = int(twoja_wydajnosc_suma - total_wizyt_do_zrobienia)
-                st.success(f
+                st.success(f"Masz **{max(0, zapas)}** wizyt zapasu
