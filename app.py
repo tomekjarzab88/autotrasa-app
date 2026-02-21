@@ -113,4 +113,15 @@ if uploaded_file:
                 st.error(f"Zabraknie Ci **{max(0, brakuje)}** wizyt.")
             else:
                 zapas = int(twoja_wydajnosc_suma - total_wizyt_do_zrobienia)
-                st.success(f"Masz **{max(0, zapas)}** wizyt zap
+                st.success(f"Masz **{max(0, zapas)}** wizyt zapasu.")
+
+        st.write("---")
+        st.subheader("📍 Podgląd lokalizacji")
+        m = folium.Map(location=[52.0688, 19.4797], zoom_start=6)
+        st_folium(m, width=1100, height=400)
+        
+        st.write("### 📋 Twoja Baza")
+        st.dataframe(df.head(10))
+
+    except Exception as e:
+        st.error(f"Błąd: {e}")
