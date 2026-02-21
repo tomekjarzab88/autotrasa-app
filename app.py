@@ -10,7 +10,7 @@ st.set_page_config(page_title="AutoTrasa - Planer Cyklu", layout="wide")
 
 # --- INICJALIZACJA STANU SESJI ---
 if 'nieobecnosci' not in st.session_state:
-    st.session_state.nieobecnosci = [] # Przechowujemy tu słowniki {'typ': 'zakres/dzien', 'daty': [...]}
+    st.session_state.nieobecnosci = []
 
 # --- PANEL BOCZNY ---
 with st.sidebar:
@@ -26,33 +26,45 @@ with st.sidebar:
     st.write("---")
     st.header("📅 Nieobecności")
     
-    wybrane = st.date_input("Zaznacz dni lub zakresy:", value=[], min_value=date(2025, 1, 1))
+    # Używamy prostszego wyboru dat, który zawsze zwraca tuple (start, end) lub (start,)
+    wybrane = st.date_input(
+        "Zaznacz dni lub zakresy:", 
+        value=(), # Startujemy z pustą wartością
+        min_value=date(2025, 1, 1)
+    )
     
     if st.button("➕ Dodaj do listy"):
-        if isinstance(wybrane, list) and len(wybrane) == 2:
-            # Dodawanie zakresu
-            start, end = wybrane
-            dni_w_zakresie = []
-            curr = start
-            while curr <= end:
-                dni_w_zakresie.append(curr)
-                curr += timedelta(days=1)
-            st.session_state.nieobecnosci.append({'label': f"{start.strftime('%d.%m')} - {end.strftime('%d.%m')}", 'dni': dni_w_zakresie})
-        elif isinstance(wybrane, list) and len(wybrane) == 1:
-            # Pojedynczy dzień z kalendarza
-            d = wybrane[0]
-            st.session_state.nieobecnosci.append({'label': f"{d.strftime('%d.%m')}", 'dni': [d]})
-        elif isinstance(wybrane, date):
-            st.session_state.nieobecnosci.append({'label': f"{wybrane.strftime('%d.%m')}", 'dni': [wybrane]})
-        st.rerun()
+        # Sprawdzamy co dostaliśmy z kalendarza
+        if isinstance(wybrane, (list, tuple)) and len(wybrane) > 0:
+            if len(wybrane) == 2:
+                # To jest pełny zakres
+                start, end = wybrane
+                dni_w_zakresie = []
+                curr = start
+                while curr <= end:
+                    dni_w_zakresie.append(curr)
+                    curr += timedelta(days=1)
+                st.session_state.nieobecnosci.append({
+                    'label': f"{start.strftime('%d.%m')} - {end.strftime('%d.%m')}", 
+                    'dni': dni_w_zakresie
+                })
+            else:
+                # To jest pojedynczy dzień kliknięty w kalendarzu
+                d = wybrane[0]
+                st.session_state.nieobecnosci.append({
+                    'label': f"{d.strftime('%d.%m')}", 
+                    'dni': [d]
+                })
+            st.rerun() # Wymuszamy przeładowanie, żeby lista się pojawiła
 
     # WYŚWIETLANIE I USUWANIE GRUP
     suma_dni_wolnych = 0
     if st.session_state.nieobecnosci:
         st.write("**Twoje wolne:**")
+        # Wyświetlamy od najnowszych na górze
         for i, grupa in enumerate(st.session_state.nieobecnosci):
             col_l, col_b = st.columns([3, 1])
-            col_l.write(f"• {grupa['label']}")
+            col_l.write(f"• {grupa['label']} ({len(grupa['dni'])} dni)")
             if col_b.button("❌", key=f"group_{i}"):
                 st.session_state.nieobecnosci.pop(i)
                 st.rerun()
@@ -108,11 +120,13 @@ if uploaded_file:
         with c_right:
             st.write("### 📝 Status")
             if wymagana_srednia > limit_dzienny:
-                st.error(f"Musisz robić **{round(wymagana_srednia, 1)}** wizyt/dzień.")
+                st.error(f"Zwiększ limit do **{round(wymagana_srednia, 1)}**")
             else:
-                st.success(f"Limit **{limit_dzienny}** jest OK.")
+                st.success(f"Limit **{limit_dzienny}** wystarczy.")
 
-        st_folium(folium.Map(location=[52.0688, 19.4797], zoom_start=6), width=1100, height=400)
+        # MAPA
+        m = folium.Map(location=[52.0688, 19.4797], zoom_start=6)
+        st_folium(m, width=1100, height=400)
 
     except Exception as e:
         st.error(f"Błąd: {e}")
