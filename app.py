@@ -8,6 +8,7 @@ import folium
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 import time
+import random
 
 # --- KONFIGURACJA ---
 st.set_page_config(page_title="A2B FlowRoute PRO", layout="wide", initial_sidebar_state="expanded")
@@ -111,7 +112,7 @@ with st.sidebar:
 st.markdown(f"""
     <div style='display: flex; justify-content: space-between; align-items: center;'>
         <h1 style='margin:0;'>Dashboard A2B FlowRoute</h1>
-        <div style='background:{COLOR_CYAN}; color:white; padding:5px 15px; border-radius:20px; font-weight:bold;'>PRO v7.6</div>
+        <div style='background:{COLOR_CYAN}; color:white; padding:5px 15px; border-radius:20px; font-weight:bold;'>PRO v7.7</div>
     </div>
     <p style='color:#8A9AB8; margin-top:0;'>Optymalizacja trasy dla Przedstawicieli</p>
     """, unsafe_allow_html=True)
@@ -175,41 +176,62 @@ if uploaded_file:
 
         if col_m and col_u:
             if st.button("🌍 GENERUJ MAPĘ PUNKTÓW"):
-                with st.spinner("Lokalizuję punkty (to może chwilę potrwać ze względu na limity)..."):
-                    # Używamy Nominatim z RateLimiterem
-                    geolocator = Nominatim(user_agent="a2b_flowroute_v7")
-                    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1) # Grzeczne odstępy
+                with st.spinner("Inicjalizacja inteligentnego geokodowania..."):
+                    # Dynamiczny User-Agent, aby uniknąć blokad
+                    ua = f"A2B_FlowRoute_User_{random.randint(1000, 9999)}"
+                    geolocator = Nominatim(user_agent=ua, timeout=10)
+                    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
                     
                     m = folium.Map(location=[52.0, 19.0], zoom_start=6, tiles="cartodbpositron")
                     
-                    # Bierzemy pierwsze 15 punktów do testu
-                    counter = 0
-                    for _, row in df.head(15).iterrows():
-                        adres = f"{row[col_u]}, {row[col_m]}, Polska"
-                        try:
-                            loc = geocode(adres)
-                            if loc:
-                                folium.CircleMarker(
-                                    location=[loc.latitude, loc.longitude],
-                                    radius=7,
-                                    color=COLOR_CYAN,
-                                    fill=True,
-                                    fill_color=COLOR_CYAN,
-                                    popup=f"<b>{row[col_u]}</b><br>{row[col_m]}"
-                                ).add_to(m)
-                                counter += 1
-                        except:
-                            continue
+                    found_points = 0
+                    test_limit = 10 # Bierzemy 10 na test, żeby sprawdzić czy w ogóle działa
                     
-                    if counter > 0:
+                    progress_text = st.empty()
+                    
+                    for i, row in df.head(test_limit).iterrows():
+                        city = str(row[col_m]).strip()
+                        street = str(row[col_u]).strip()
+                        
+                        # Próba 1: Pełny adres
+                        full_address = f"{street}, {city}, Polska"
+                        progress_text.text(f"Sprawdzam: {full_address}...")
+                        
+                        loc = geocode(full_address)
+                        
+                        # Próba 2: Sam adres bez numeru lokalu (jeśli jest np. "Ulica 12/4")
+                        if not loc and "/" in street:
+                            simplified_street = street.split("/")[0]
+                            progress_text.text(f"Próba uproszczona: {simplified_street}, {city}...")
+                            loc = geocode(f"{simplified_street}, {city}, Polska")
+                        
+                        if loc:
+                            folium.CircleMarker(
+                                location=[loc.latitude, loc.longitude],
+                                radius=8,
+                                color=COLOR_CYAN,
+                                fill=True,
+                                fill_color=COLOR_CYAN,
+                                popup=f"<b>{street}</b><br>{city}"
+                            ).add_to(m)
+                            found_points += 1
+                        
+                        time.sleep(0.5) # Dodatkowy bufor bezpieczeństwa
+
+                    progress_text.empty()
+                    
+                    if found_points > 0:
                         st_folium(m, width=1300, height=500)
-                        st.success(f"Znaleziono i naniesiono {counter} punktów.")
+                        st.success(f"Sukces! Naniesiono {found_points} z {test_limit} testowych punktów.")
                     else:
-                        st.error("Nie udało się zlokalizować żadnego punktu. Sprawdź poprawność adresów w pliku.")
+                        st.error("Nadal nie mogę znaleźć adresów. Możliwe przyczyny:")
+                        st.write("1. Plik CSV ma błędne nazwy miast/ulic.")
+                        st.write("2. Serwer geolokalizacji tymczasowo odmawia dostępu (spróbuj za 5 min).")
+                        st.write(f"Przykładowy szukany adres: {street}, {city}, Polska")
         else:
-            st.warning("Nie znaleziono kolumn 'Miasto' i 'Ulica'.")
+            st.warning("Nie znaleziono kolumn adresowych.")
 
     except Exception as e:
-        st.error(f"Błąd danych: {e}")
+        st.error(f"Błąd przetwarzania: {e}")
 else:
-    st.info("👋 Wgraj plik CSV, aby zaplanować trasę.")
+    st.info("👋 Wgraj plik CSV, aby rozpocząć.")
