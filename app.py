@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import chardet
-from datetime import datetime
+from datetime import datetime, date
 import plotly.graph_objects as go
 from streamlit_folium import st_folium
 import folium
@@ -21,7 +21,7 @@ def find_column(columns, patterns):
 st.title("🚚 AutoTrasa / FromAtoB")
 
 # --- KONTEKST CZASOWY ---
-dzis = datetime.now().date()
+dzis = date.today()
 st.info(f"📅 Dzisiaj jest: **{dzis.strftime('%d.%m.%Y')}**")
 
 # --- PANEL BOCZNY (SIDEBAR) ---
@@ -31,19 +31,15 @@ with st.sidebar:
     wizyty_na_klienta = st.number_input("Wizyty u 1 klienta", min_value=1, value=1)
     
     st.header("📅 Twoja dostępność")
-    # POPRAWKA: Usunięto min_value, aby móc zaznaczać daty wstecz
+    # POPRAWKA: Ustawienie min_value na sztywno wstecz, aby odblokować kalendarz
     dni_wolne = st.date_input(
         "Zaznacz dni nieobecności (L4, Szkolenia, Urlopy)", 
-        value=[dzis], 
+        value=[dzis],
+        min_value=date(2024, 1, 1), # Pozwala cofać się w kalendarzu
+        max_value=date(2030, 12, 31)
     )
     
-    rodzaj_wolnego = st.multiselect(
-        "Typ nieobecności w zaznaczonych dniach:",
-        ["Urlop", "L4", "Szkolenie", "Konferencja", "Inne"],
-        default=["Urlop"]
-    )
-    
-    st.caption("💡 Możesz wybierać daty z przeszłości oraz przyszłości. Każdy dzień odejmuje się od Twojego limitu czasu w cyklu.")
+    st.caption("💡 Teraz możesz klikać daty wstecz. Każdy wybrany dzień zostanie odjęty od puli dni roboczych.")
 
 # --- WCZYTYWANIE PLIKU ---
 uploaded_file = st.file_uploader("Wgraj plik CSV z bazą aptek", type=["csv"])
@@ -60,11 +56,15 @@ if uploaded_file:
         col_ulica = find_column(df.columns, ['ulica', 'adres', 'street', 'addr', 'ul.'])
         col_id = find_column(df.columns, ['akronim', 'id', 'nazwa', 'kod'])
 
-        # Obliczenia biznesowe
+        # Obliczenia dni roboczych
         dni_podstawa = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
-        # Liczba wybranych dni wolnych
-        ile_wolnych = len(dni_wolne) if isinstance(dni_wolne, list) else 1
         
+        # Obsługa błędu gdy użytkownik wybiera zakres (start, end) zamiast pojedynczych dat
+        if isinstance(dni_wolne, (list, tuple)):
+            ile_wolnych = len(dni_wolne)
+        else:
+            ile_wolnych = 1
+            
         dni_robocze = dni_podstawa[typ_cyklu] - ile_wolnych
         total_wizyt = len(df) * wizyty_na_klienta
         srednia_dzienna = total_wizyt / dni_robocze if dni_robocze > 0 else 0
@@ -100,14 +100,12 @@ if uploaded_file:
         # --- SEKCJA MAPY ---
         st.subheader("📍 Mapa Twoich Punktów")
         if col_miasto and col_ulica:
-            st.success(f"✅ Dane gotowe. Używam kolumn: **{col_ulica}** oraz **{col_miasto}**")
-            
-            # Mapa Polski
+            st.success(f"✅ Rozpoznano kolumny: **{col_ulica}**, **{col_miasto}**")
             m = folium.Map(location=[52.0688, 19.4797], zoom_start=6)
             st_folium(m, width=1200, height=500)
             
-            if st.button("🚀 GENERUJ TRASĘ (Uwzględnij nieobecności)"):
-                st.info("Algorytm przelicza teraz najlepszą trasę, omijając zaznaczone dni wolne...")
+            if st.button("🚀 GENERUJ TRASĘ"):
+                st.info("Przygotowuję współrzędne... W następnym kroku zobaczymy punkty na mapie!")
         
         st.write("### 📋 Podgląd danych")
         st.dataframe(df.head(10))
