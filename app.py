@@ -3,15 +3,16 @@ import pandas as pd
 import chardet
 from datetime import datetime
 import plotly.graph_objects as go
+from streamlit_folium import st_folium
+import folium
 
-st.set_page_config(page_title="AutoTrasa - Kompletny Planer", layout="wide")
+st.set_page_config(page_title="AutoTrasa - Inteligentny Planer", layout="wide")
 
 # --- FUNKCJA INTELIGENTNEGO SZUKANIA KOLUMN ---
 def find_column(columns, patterns):
     for pattern in patterns:
         for col in columns:
             clean_col = col.lower().strip()
-            # Usuwanie polskich znaków do porównania
             clean_col = clean_col.replace('ą','a').replace('ę','e').replace('ś','s').replace('ć','c').replace('ó','o').replace('ń','n').replace('ł','l').replace('ź','z').replace('ż','z')
             if pattern in clean_col:
                 return col
@@ -30,14 +31,18 @@ with st.sidebar:
     wizyty_na_klienta = st.number_input("Wizyty u 1 klienta", min_value=1, value=1)
     
     st.header("📅 Twoja dostępność")
-    dni_wolne = st.date_input("Zaznacz dni wolne/szkolenia", value=[], min_value=dzis)
-    st.caption("Kliknij datę, aby dodać ją do listy dni wolnych.")
+    # POPRAWKA: Kalendarz teraz domyślnie zaznacza dzisiejszą datę
+    dni_wolne = st.date_input(
+        "Zaznacz dni wolne/szkolenia", 
+        value=[dzis], # Dzisiejsza data jest teraz domyślnie na liście/podświetlona
+        min_value=dzis
+    )
+    st.caption("Dzisiejsza data została podświetlona. Dodaj kolejne dni wolne klikając w kalendarz.")
 
 # --- WCZYTYWANIE PLIKU ---
 uploaded_file = st.file_uploader("Wgraj plik CSV (np. export z Farmaprom)", type=["csv"])
 
 if uploaded_file:
-    # Wykrywanie kodowania
     raw_data = uploaded_file.read()
     charenc = chardet.detect(raw_data)['encoding']
     uploaded_file.seek(0)
@@ -45,18 +50,17 @@ if uploaded_file:
     try:
         df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=charenc)
         
-        # 1. Automatyczne rozpoznawanie kolumn
         col_miasto = find_column(df.columns, ['miasto', 'miejscowosc', 'city', 'town'])
         col_ulica = find_column(df.columns, ['ulica', 'adres', 'street', 'addr', 'ul.'])
         col_id = find_column(df.columns, ['akronim', 'id', 'nazwa', 'kod'])
 
-        # 2. Obliczenia Biznesowe
+        # Obliczenia
         dni_podstawa = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
         dni_robocze = dni_podstawa[typ_cyklu] - len(dni_wolne)
         total_wizyt = len(df) * wizyty_na_klienta
         srednia_dzienna = total_wizyt / dni_robocze if dni_robocze > 0 else 0
 
-        # --- 📊 DASHBOARD STATYSTYK ---
+        # --- DASHBOARD ---
         c1, c2, c3 = st.columns([1, 1, 2])
         with c1:
             st.metric("Klienci w bazie", len(df))
@@ -65,44 +69,32 @@ if uploaded_file:
             st.metric("Suma wizyt", total_wizyt)
             st.metric("Średnia / dzień", round(srednia_dzienna, 1))
         with c3:
-            # Wykres Gauge (Licznik)
             fig = go.Figure(go.Indicator(
                 mode = "gauge+number",
                 value = srednia_dzienna,
                 title = {'text': "Wymagana średnia dzienna"},
-                gauge = {
-                    'axis': {'range': [None, 25]},
-                    'bar': {'color': "#0083B8"},
-                    'steps': [
-                        {'range': [0, 10], 'color': "#e8f5e9"},
-                        {'range': [10, 15], 'color': "#fff3e0"},
-                        {'range': [15, 25], 'color': "#ffebee"}
-                    ],
-                    'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 18}
-                }
+                gauge = {'axis': {'range': [None, 25]}, 'bar': {'color': "#0083B8"}}
             ))
             fig.update_layout(height=230, margin=dict(l=20, r=20, t=50, b=20))
             st.plotly_chart(fig, use_container_width=True)
 
-        # --- 🔍 ANALIZA ADRESÓW ---
         st.write("---")
-        st.subheader("🔍 Analiza struktury pliku")
         
+        # --- SEKCJA MAPY ---
+        st.subheader("📍 Mapa Twoich Punktów")
         if col_miasto and col_ulica:
-            st.success(f"✅ Rozpoznano adresy: **{col_ulica}** w mieście **{col_miasto}**.")
+            st.success(f"✅ Dane adresowe gotowe. Rozpoznano: {col_ulica}, {col_miasto}")
             
-            # Tworzenie pełnego adresu do geolokalizacji
-            df['full_address'] = df[col_ulica].astype(str) + ", " + df[col_miasto].astype(str) + ", Polska"
+            # Tworzymy podglądową mapę Polski (środek kraju)
+            m = folium.Map(location=[52.0688, 19.4797], zoom_start=6)
             
-            # SEKCJA MAPY (PRZYGOTOWANIE)
-            if st.button("🚀 GENERUJ TRASY I MAPĘ"):
-                st.write("Łączenie z bazą współrzędnych...")
-                st.dataframe(df[[col_id, 'full_address']].head(10))
-                st.info("W następnym kroku dodamy wyświetlanie kropek na mapie Polski!")
-        else:
-            st.error("❌ Nie udało się automatycznie rozpoznać kolumn z adresem (Miasto/Ulica).")
-
-        st.write("### 📋 Podgląd danych wejściowych")
+            # Wyświetlamy mapę w Streamlit
+            st_folium(m, width=1200, height=500)
+            
+            if st.button("🚀 ROZPOCZNIJ GEOLOKALIZACJĘ I PLANOWANIE"):
+                st.info("Trwa przygotowywanie współrzędnych dla Twoich punktów... (Kolejny krok)")
+        
+        st.write("### 📋 Podgląd danych")
         st.dataframe(df.head(10))
 
     except Exception as e:
