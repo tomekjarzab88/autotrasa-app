@@ -10,14 +10,17 @@ from geopy.extra.rate_limiter import RateLimiter
 import time
 import random
 import re
+from sklearn.cluster import KMeans
+import numpy as np
 
 # --- KONFIGURACJA ---
-st.set_page_config(page_title="A2B FlowRoute PRO", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="A2B FlowRoute LOGISTICS", layout="wide", initial_sidebar_state="expanded")
 
 # --- KOLORYSTYKA ---
 COLOR_CYAN = "#00C2CB"
 COLOR_NAVY_DARK = "#1A2238"
 COLOR_BG = "#1F293D"
+DAILY_COLORS = ['blue', 'green', 'red', 'purple', 'orange', 'darkred', 'lightred', 'beige', 'darkblue', 'darkgreen', 'cadetblue', 'pink', 'lightblue', 'lightgreen', 'gray', 'black', 'lightgray']
 
 st.markdown(f"""
     <style>
@@ -29,8 +32,7 @@ st.markdown(f"""
         background-color: white; border-radius: 12px; padding: 15px !important;
         border-left: 5px solid {COLOR_CYAN}; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
     }}
-    div[data-testid="stMetric"] label {{ color: #64748B !important; font-weight: 600; }}
-    div[data-testid="stMetricValue"] {{ color: {COLOR_NAVY_DARK} !important; font-size: 1.8rem !important; }}
+    div[data-testid="stMetricValue"] {{ color: {COLOR_NAVY_DARK} !important; font-size: 1.6rem !important; }}
     .stButton>button {{
         background: linear-gradient(135deg, {COLOR_CYAN} 0%, #00A0A8 100%) !important;
         color: white !important; border-radius: 8px !important; font-weight: bold !important; width: 100%;
@@ -38,29 +40,21 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- INICJALIZACJA PAMIĘCI SESJI ---
-if 'nieobecnosci' not in st.session_state:
-    st.session_state.nieobecnosci = []
-if 'mapa_wygenerowana' not in st.session_state:
-    st.session_state.mapa_wygenerowana = False
-if 'punkty_mapy' not in st.session_state:
-    st.session_state.punkty_mapy = None
+# --- INICJALIZACJA SESJI ---
+if 'nieobecnosci' not in st.session_state: st.session_state.nieobecnosci = []
+if 'trasa_data' not in st.session_state: st.session_state.trasa_data = None
 
-# --- FUNKCJA CZYSZCZENIA ADRESU ---
+# --- FUNKCJE POMOCNICZE ---
 def clean_address(text):
     if not isinstance(text, str): return ""
     rep = {'GÛ': 'Gó', 'Û': 'ó', 'Ã³': 'ó', 'Ä…': 'ą', 'Ä™': 'ę', 'Å›': 'ś', 'Ä‡': 'ć', 'Åº': 'ź', 'Å¼': 'ż', 'Å‚': 'ł', 'Å„': 'ń'}
-    for k, v in rep.items():
-        text = text.replace(k, v)
-    text = re.sub(r'[^\w\s,.-]', '', text)
-    return text.strip()
+    for k, v in rep.items(): text = text.replace(k, v)
+    return re.sub(r'[^\w\s,.-]', '', text).strip()
 
 # --- SIDEBAR ---
 with st.sidebar:
-    try:
-        st.image("assets/logo_a2b.png", use_container_width=True)
-    except:
-        st.markdown(f"<h2 style='color:{COLOR_CYAN}'>A2B FlowRoute</h2>", unsafe_allow_html=True)
+    try: st.image("assets/logo_a2b.png", use_container_width=True)
+    except: st.markdown(f"<h2 style='color:{COLOR_CYAN}'>A2B FlowRoute</h2>", unsafe_allow_html=True)
     
     st.write("---")
     typ_cyklu = st.selectbox("Długość cyklu", ["Miesiąc", "2 Miesiące", "Kwartał"])
@@ -70,7 +64,7 @@ with st.sidebar:
     
     st.write("---")
     dni_input = st.date_input("Planuj wolne:", value=(), min_value=date(2025, 1, 1))
-    if st.button("➕ DODAJ"):
+    if st.button("➕ DODAJ WOLNE"):
         if isinstance(dni_input, (list, tuple)) and len(dni_input) > 0:
             label = f"{dni_input[0].strftime('%d.%m')}" if len(dni_input)==1 else f"{dni_input[0].strftime('%d.%m')} - {dni_input[1].strftime('%d.%m')}"
             st.session_state.nieobecnosci.append({'label': label, 'count': 1 if len(dni_input)==1 else (dni_input[1]-dni_input[0]).days + 1})
@@ -78,99 +72,98 @@ with st.sidebar:
 
     suma_wolnych = sum(g['count'] for g in st.session_state.nieobecnosci)
     for i, g in enumerate(st.session_state.nieobecnosci):
-        c1, c2 = st.columns([4, 1])
-        c1.caption(f"🏝️ {g['label']}")
-        if c2.button("X", key=f"d_{i}"):
-            st.session_state.nieobecnosci.pop(i); st.rerun()
+        c1, c2 = st.columns([4, 1]); c1.caption(f"🏝️ {g['label']}")
+        if c2.button("X", key=f"d_{i}"): st.session_state.nieobecnosci.pop(i); st.rerun()
 
 # --- PANEL GŁÓWNY ---
-st.markdown(f"<h1 style='margin:0;'>Dashboard A2B FlowRoute</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='margin:0;'>Optymalizacja Logistyczna</h1>", unsafe_allow_html=True)
 
-uploaded_file = st.file_uploader("📂 Wgraj bazę (Excel .xlsx lub CSV)", type=["csv", "xlsx", "xls"])
+uploaded_file = st.file_uploader("📂 Wgraj bazę (Excel lub CSV)", type=["csv", "xlsx", "xls"])
 
 if uploaded_file:
     try:
-        # Odczyt pliku
+        # 1. WCZYTYWANIE I USUWANIE DUBLI
         if uploaded_file.name.endswith('.csv'):
-            raw_data = uploaded_file.read()
-            detection = chardet.detect(raw_data)
-            uploaded_file.seek(0)
+            raw_data = uploaded_file.read(); detection = chardet.detect(raw_data); uploaded_file.seek(0)
             df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=detection['encoding'] if detection['confidence'] > 0.5 else 'utf-8-sig')
         else:
             df = pd.read_excel(uploaded_file)
         
-        df = df.applymap(clean_address)
-        
-        # Metryki
-        dni_p = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
-        dni_n = max(0, dni_p[typ_cyklu] - suma_wolnych)
-        cel_total = len(df) * wizyty_cel
-        do_zrobienia = max(0, cel_total - zrobione)
-        srednia = do_zrobienia / dni_n if dni_n > 0 else 0
-
-        st.write("---")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Klienci", len(df))
-        m2.metric("Dni Netto", dni_n)
-        m3.metric("Do celu", do_zrobienia)
-        m4.metric("Realizacja", f"{round((zrobione/cel_total*100),1)}%" if cel_total>0 else "0%")
-
-        st.write("---")
-        st.subheader("📍 Mapa Operacyjna")
-        
         col_m = next((c for c in df.columns if 'miasto' in c.lower() or 'miejscowość' in c.lower()), None)
         col_u = next((c for c in df.columns if 'ulica' in c.lower() or 'adres' in c.lower()), None)
-
+        
         if col_m and col_u:
-            # Przycisk zmienia stan w pamięci sesji
-            if st.button("🌍 GENERUJ / ODŚWIEŻ MAPĘ"):
-                with st.spinner("Szukanie adresów..."):
-                    ua = f"A2B_Final_{random.randint(1,999)}"
+            # Usuwanie dubli na podstawie adresu
+            df_unique = df.drop_duplicates(subset=[col_m, col_u]).copy()
+            df_unique[col_m] = df_unique[col_m].apply(clean_address)
+            df_unique[col_u] = df_unique[col_u].apply(clean_address)
+            
+            # Obliczenia dni
+            dni_p = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
+            dni_n = max(1, dni_p[typ_cyklu] - suma_wolnych)
+            
+            st.success(f"Baza przetworzona. Znaleziono **{len(df_unique)}** unikalnych punktów na **{dni_n}** dni pracy.")
+            
+            # 2. GENEROWANIE TRASY
+            if st.button("🚀 GENERUJ OPTYMALNĄ TRASĘ DLA CAŁEJ BAZY"):
+                with st.spinner("Geolokalizacja i optymalizacja logistyczna... Może to potrwać kilka minut."):
+                    ua = f"A2B_Logistics_{random.randint(1,999)}"
                     geolocator = Nominatim(user_agent=ua, timeout=10)
-                    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
+                    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
                     
-                    m = folium.Map(location=[52.0, 19.0], zoom_start=6, tiles="cartodbpositron")
+                    coords = []
+                    progress_bar = st.progress(0)
                     
-                    test_df = df.head(15).copy()
-                    found = 0
-                    for i, row in test_df.iterrows():
-                        city = str(row[col_m]).strip()
-                        street = str(row[col_u]).strip()
-                        addr = f"{street}, {city}, Polska"
+                    for idx, row in df_unique.iterrows():
+                        addr = f"{row[col_u]}, {row[col_m]}, Polska"
                         loc = geocode(addr)
+                        if not loc and ' ' in str(row[col_u]):
+                            loc = geocode(f"{str(row[col_u]).rsplit(' ', 1)[0]}, {row[col_m]}, Polska")
                         
-                        if not loc and ' ' in street:
-                            street_only = street.rsplit(' ', 1)[0]
-                            loc = geocode(f"{street_only}, {city}, Polska")
-
                         if loc:
-                            folium.CircleMarker(
-                                location=[loc.latitude, loc.longitude],
-                                radius=10, color=COLOR_CYAN, fill=True, fill_color=COLOR_CYAN,
-                                popup=f"<b>{street}</b><br>{city}"
-                            ).add_to(m)
-                            found += 1
+                            coords.append({'lat': loc.latitude, 'lon': loc.longitude, 'addr': addr})
+                        
+                        progress_bar.progress((len(coords)) / len(df_unique))
                     
-                    # Zapisujemy mapę do sesji
-                    st.session_state.punkty_mapy = m
-                    st.session_state.mapa_wygenerowana = True
-                    if found == 0:
-                        st.warning("Nie znaleziono żadnego adresu na mapie.")
+                    if coords:
+                        points_df = pd.DataFrame(coords)
+                        
+                        # 3. KLASTROWANIE (Podział na dni robocze)
+                        n_clusters = min(dni_n, len(points_df))
+                        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                        points_df['dzien'] = kmeans.fit_predict(points_df[['lat', 'lon']])
+                        
+                        st.session_state.trasa_data = points_df
+                        st.success(f"Zlokalizowano {len(points_df)} punktów i podzielono na {n_clusters} dni.")
+                    else:
+                        st.error("Nie udało się zlokalizować punktów. Sprawdź poprawność adresów.")
 
-            # Jeśli mapa jest w pamięci, wyświetl ją (niezależnie od kliknięcia przycisku)
-            if st.session_state.mapa_wygenerowana and st.session_state.punkty_mapy:
-                st_folium(st.session_state.punkty_mapy, width=1300, height=500, key="mapa_glowna")
-                if st.button("🗑️ UKRYJ MAPĘ"):
-                    st.session_state.mapa_wygenerowana = False
-                    st.rerun()
-
+            # 4. WYŚWIETLANIE WYNIKÓW
+            if st.session_state.trasa_data is not None:
+                df_map = st.session_state.trasa_data
+                
+                tab1, tab2 = st.tabs(["🗺️ Mapa Logistyczna", "📅 Rozpiska Dniowa"])
+                
+                with tab1:
+                    m = folium.Map(location=[df_map['lat'].mean(), df_map['lon'].mean()], zoom_start=7, tiles="cartodbpositron")
+                    for _, row in df_map.iterrows():
+                        color = DAILY_COLORS[int(row['dzien']) % len(DAILY_COLORS)]
+                        folium.CircleMarker(
+                            location=[row['lat'], row['lon']],
+                            radius=8, color=color, fill=True, fill_color=color,
+                            popup=f"Dzień {int(row['dzien'])+1}: {row['addr']}"
+                        ).add_to(m)
+                    st_folium(m, width=1300, height=600)
+                
+                with tab2:
+                    for d in range(int(df_map['dzien'].max()) + 1):
+                        with st.expander(f"📍 DZIEŃ {d+1} - Lista punktów"):
+                            day_points = df_map[df_map['dzien'] == d]
+                            for _, p in day_points.iterrows():
+                                st.write(f"• {p['addr']}")
         else:
-            st.warning("Nie znaleziono kolumn adresowych.")
-
+            st.warning("Plik musi zawierać kolumny z miastem i ulicą.")
     except Exception as e:
-        st.error(f"Błąd: {e}")
+        st.error(f"Błąd systemu: {e}")
 else:
-    # Resetuj stan mapy po usunięciu pliku
-    st.session_state.mapa_wygenerowana = False
-    st.session_state.punkty_mapy = None
-    st.info("👋 Wgraj plik Excel lub CSV.")
+    st.info("👋 Wgraj plik, aby A2B FlowRoute zaplanował Twoją pracę.")
