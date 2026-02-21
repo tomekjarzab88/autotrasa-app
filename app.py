@@ -1,83 +1,84 @@
 import streamlit as st
 import pandas as pd
 import chardet
+from datetime import datetime
+import plotly.graph_objects as go
 
 st.set_page_config(page_title="AutoTrasa - Twój Planer Cyklu", layout="wide")
 
-# --- STYLE WIZUALNE ---
-st.markdown("""
-    <style>
-    .main { background-color: #f5f7f9; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    </style>
-    """, unsafe_allow_html=True)
-
 st.title("🚚 AutoTrasa / FromAtoB")
-st.subheader("Automatyczne planowanie tras i cyklu wizyt")
 
-# --- PANEL BOCZNY (SIDEBAR) ---
+# --- DZISIEJSZA DATA ---
+dzis = datetime.now().strftime("%d.%m.%Y")
+st.info(f"📅 Dzisiaj jest: **{dzis}**")
+
+# --- PANEL BOCZNY ---
 with st.sidebar:
     st.header("⚙️ Ustawienia Cyklu")
-    typ_cyklu = st.selectbox("Długość cyklu", ["Miesiąc", "2 Miesiące", "Kwartał", "Pół roku"])
-    wizyty_na_klienta = st.number_input("Ilość wizyt u 1 klienta w cyklu", min_value=1, value=1)
-    limit_dzienny = st.slider("Limit wizyt dziennie", 5, 25, 10)
+    typ_cyklu = st.selectbox("Długość cyklu", ["Miesiąc", "2 Miesiące", "Kwartał"])
+    wizyty_na_klienta = st.number_input("Wizyty u 1 klienta", min_value=1, value=1)
     
     st.header("📅 Twoja dostępność")
-    dni_wolne = st.date_input("Zaznacz dni wolne / szkolenia / L4", [])
-    
-    st.info("Podpowiedź: System automatycznie przeliczy trasę omijając te dni.")
+    dni_wolne = st.date_input("Zaznacz dni wolne/L4/Urlop", [])
 
-# --- WGRYWANIE I ANALIZA PLIKU ---
-uploaded_file = st.file_uploader("Wgraj plik CSV z Farmaprom", type=["csv"])
+# --- WCZYTYWANIE ---
+uploaded_file = st.file_uploader("Wgraj plik CSV", type=["csv"])
 
 if uploaded_file:
-    # Wykrywanie kodowania (to co zadziałało wcześniej)
     raw_data = uploaded_file.read()
-    result = chardet.detect(raw_data)
-    charenc = result['encoding']
+    charenc = chardet.detect(raw_data)['encoding']
     uploaded_file.seek(0)
     
     try:
         df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=charenc)
-        
-        # OBLICZENIA BIZNESOWE
         total_klientow = len(df)
         
-        # Przyjmujemy średnio 21 dni roboczych w miesiącu minus wybrane dni wolne
-        dni_w_miesiacu = 21 
-        if typ_cyklu == "2 Miesiące": dni_w_miesiacu = 42
-        elif typ_cyklu == "Kwartał": dni_w_miesiacu = 63
-        elif typ_cyklu == "Pół roku": dni_w_miesiacu = 126
+        # Logika dni roboczych
+        dni_podstawa = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
+        dni_robocze = dni_podstawa[typ_cyklu] - len(dni_wolne)
         
-        dni_robocze = dni_w_miesiacu - len(dni_wolne)
-        potrzebne_wizyty = total_klientow * wizyty_na_klienta
-        mozliwe_wizyty_suma = limit_dzienny * dni_robocze
-        
-        realizacja = (mozliwe_wizyty_suma / potrzebne_wizyty) * 100 if potrzebne_wizyty > 0 else 0
+        suma_wizyt = total_klientow * wizyty_na_klienta
+        # OBLICZANIE ŚREDNIEJ
+        srednia_dzienna = suma_wizyt / dni_robocze if dni_robocze > 0 else 0
 
-        # --- DASHBOARD STATYSTYK ---
-        col1, col2, col3, col4 = st.columns(4)
+        # --- DASHBOARD ---
+        c1, c2, c3 = st.columns([1, 1, 2])
         
-        with col1:
-            st.metric("Liczba klientów", total_klientow)
-        with col2:
-            st.metric("Dni robocze", f"{dni_robocze}")
-        with col3:
-            st.metric("Suma wizyt", potrzebne_wizyty)
-        with col4:
-            color = "normal" if realizacja >= 100 else "inverse"
-            st.metric("Realizacja Planu", f"{round(realizacja, 1)}%", delta=f"{round(realizacja-100, 1)}%", delta_color=color)
+        with c1:
+            st.metric("Klienci w bazie", total_klientow)
+            st.metric("Pozostałe dni robocze", dni_robocze)
+            
+        with c2:
+            st.metric("Wszystkie wizyty", suma_wizyt)
+            st.metric("Średnia wizyt / dzień", round(srednia_dzienna, 1))
 
-        if realizacja < 100:
-            st.warning(f"⚠️ Przy tym limicie ({limit_dzienny}/dzień) nie zrealizujesz całego planu! Brakuje {potrzebne_wizyty - mozliwe_wizyty_suma} wizyt. Zwiększ limit lub ogranicz dni wolne.")
-        else:
-            st.success("✅ Świetnie! Twój plan mieści się w wyznaczonym czasie.")
+        with c3:
+            # WYKRES LICZNIKA (GAUGE)
+            fig = go.Figure(go.Indicator(
+                mode = "gauge+number",
+                value = srednia_dzienna,
+                title = {'text': "Wymagana średnia dzienna"},
+                gauge = {
+                    'axis': {'range': [None, 25]},
+                    'bar': {'color': "#0083B8"},
+                    'steps': [
+                        {'range': [0, 8], 'color': "#e8f5e9"},
+                        {'range': [8, 12], 'color': "#fff3e0"},
+                        {'range': [12, 25], 'color': "#ffebee"}
+                    ],
+                    'threshold': {
+                        'line': {'color': "red", 'width': 4},
+                        'thickness': 0.75,
+                        'value': 15 # Próg ostrzegawczy
+                    }
+                }
+            ))
+            fig.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=20))
+            st.plotly_chart(fig, use_container_width=True)
 
         st.write("---")
-        st.write("### 📋 Podgląd bazy do planowania:")
-        st.dataframe(df.head(20))
+        st.write("### 📋 Podgląd danych")
+        st.dataframe(df.head(10))
 
     except Exception as e:
-        st.error(f"Wystąpił problem z formatem danych: {e}")
-else:
-    st.info("👈 Skonfiguruj parametry w panelu bocznym i wgraj plik CSV, aby rozpocząć.")
+        st.error(f"Błąd: {e}")
