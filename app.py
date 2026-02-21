@@ -19,16 +19,19 @@ with st.sidebar:
 # WGRYWANIE PLIKU
 uploaded_file = st.file_uploader("Wgraj plik CSV z Farmaprom", type=["csv"])
 
-# LOGIKA OBLICZEŃ
 if uploaded_file:
-    # Odczytujemy plik (automatycznie wykrywa separator)
-    df = pd.read_csv(uploaded_file, sep=None, engine='python')
-    
+    try:
+        # Próba 1: Standardowe kodowanie
+        df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding='utf-8')
+    except UnicodeDecodeError:
+        # Próba 2: Polskie kodowanie (jeśli próba 1 zawiedzie)
+        uploaded_file.seek(0) # wróć na początek pliku
+        df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding='cp1250')
+
     total_klientow = len(df)
-    dni_robocze = 20 - len(dni_wolne) # Założenie 20 dni w miesiącu (do dopracowania później)
+    dni_robocze = 20 - len(dni_wolne)
     potrzebne_wizyty = total_klientow * wizyty_na_klienta
     
-    # Możliwość wykonania wizyt w dostępnym czasie
     mozliwe_wizyty = limit_dzienny * dni_robocze
     realizacja = (mozliwe_wizyty / potrzebne_wizyty) * 100 if potrzebne_wizyty > 0 else 0
 
@@ -43,6 +46,6 @@ if uploaded_file:
 
     st.success("Plik wgrany poprawnie!")
     st.write("### Podgląd Twoich danych:")
-    st.dataframe(df.head(10)) # Pokazuje pierwsze 10 wierszy
+    st.dataframe(df.head(10)) 
 else:
     st.info("Wgraj plik CSV, aby zobaczyć statystyki cyklu.")
