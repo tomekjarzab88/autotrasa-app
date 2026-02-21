@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 
 st.set_page_config(page_title="AutoTrasa - Twój Planer Cyklu", layout="wide")
 
@@ -17,27 +16,33 @@ with st.sidebar:
     st.header("📅 Twoja dostępność")
     dni_wolne = st.date_input("Zaznacz dni wolne (Urlop, L4, Szkolenia)", [])
 
-# GŁÓWNY PANEL
-col1, col2, col3 = st.columns(3)
-
-# Symulacja danych do licznika live (na razie na sztywno)
-total_klientow = 120
-dni_robocze = 20 - len(dni_wolne)
-potrzebne_wizyty = total_klientow * wizyty_na_klienta
-realizacja = (limit_dzienny * dni_robocze) / potrzebne_wizyty * 100
-
-with col1:
-    st.metric("Dni robocze", f"{dni_robocze} dni")
-with col2:
-    st.metric("Potrzebne wizyty", potrzebne_wizyty)
-with col3:
-    st.metric("Realizacja Planu", f"{round(realizacja, 1)}%", delta=f"{round(realizacja-100, 1)}%")
-
 # WGRYWANIE PLIKU
 uploaded_file = st.file_uploader("Wgraj plik CSV z Farmaprom", type=["csv"])
 
+# LOGIKA OBLICZEŃ
 if uploaded_file:
-    df = pd.read_csv(uploaded_file)
+    # Odczytujemy plik (automatycznie wykrywa separator)
+    df = pd.read_csv(uploaded_file, sep=None, engine='python')
+    
+    total_klientow = len(df)
+    dni_robocze = 20 - len(dni_wolne) # Założenie 20 dni w miesiącu (do dopracowania później)
+    potrzebne_wizyty = total_klientow * wizyty_na_klienta
+    
+    # Możliwość wykonania wizyt w dostępnym czasie
+    mozliwe_wizyty = limit_dzienny * dni_robocze
+    realizacja = (mozliwe_wizyty / potrzebne_wizyty) * 100 if potrzebne_wizyty > 0 else 0
+
+    # GŁÓWNY PANEL STATYSTYK
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Dni robocze", f"{dni_robocze} dni")
+    with col2:
+        st.metric("Liczba klientów w pliku", total_klientow)
+    with col3:
+        st.metric("Realizacja Planu", f"{round(realizacja, 1)}%", delta=f"{round(realizacja-100, 1)}%")
+
     st.success("Plik wgrany poprawnie!")
-    st.write("Podgląd Twoich aptek:")
-    st.dataframe(df.head()) # Pokazuje pierwsze kilka wierszy
+    st.write("### Podgląd Twoich danych:")
+    st.dataframe(df.head(10)) # Pokazuje pierwsze 10 wierszy
+else:
+    st.info("Wgraj plik CSV, aby zobaczyć statystyki cyklu.")
