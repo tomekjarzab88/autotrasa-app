@@ -1,4 +1,4 @@
-\import streamlit as st
+import streamlit as st
 import pandas as pd
 import chardet
 from datetime import datetime, date
