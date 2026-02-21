@@ -7,128 +7,127 @@ from streamlit_folium import st_folium
 import folium
 
 # --- KONFIGURACJA PREMIUM ---
-st.set_page_config(page_title="AutoTrasa Enterprise", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="A2B FlowRoute - Asystent Trasy", layout="wide")
 
-# --- ZAAWANSOWANY CSS (MODERN UI) ---
+# --- CUSTOM CSS (Style z Twojego obrazu) ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif;
+        background-color: #F4F7F9;
     }
 
-    /* Tło i ogólny vibe */
-    .stApp {
-        background-color: #F8FAFC;
-    }
-
-    /* Nowoczesny Sidebar */
+    /* Pasek boczny - Deep Navy */
     [data-testid="stSidebar"] {
-        background-color: #0F172A !important;
-        border-right: 1px solid #1E293B;
+        background-color: #1A2238 !important;
+        border-right: 1px solid #2D3748;
     }
-    
-    /* Karty Metryk (WOW effect) */
+
+    /* Karty Dashboardu - White Cards */
     div[data-testid="stMetric"] {
         background: white;
-        border: 1px solid #E2E8F0;
+        border-radius: 12px !important;
         padding: 20px !important;
-        border-radius: 16px !important;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
-    }
-    
-    /* Stylowanie przycisków */
-    .stButton>button {
-        background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%);
-        color: white;
-        border: none;
-        padding: 10px 24px;
-        border-radius: 12px;
-        font-weight: 600;
-        transition: all 0.3s ease;
-        width: 100%;
-    }
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.4);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05) !important;
+        border-left: 5px solid #22B1CC !important;
     }
 
-    /* Elegancki nagłówek */
-    .hero-section {
-        background: white;
-        padding: 30px;
-        border-radius: 20px;
-        border: 1px solid #E2E8F0;
-        margin-bottom: 30px;
+    /* Nagłówek aplikacji */
+    .header-container {
+        background-color: #1A2238;
+        padding: 20px;
+        border-radius: 15px;
+        color: white;
+        margin-bottom: 25px;
         display: flex;
+        justify-content: space-between;
         align-items: center;
-        gap: 20px;
+    }
+
+    /* Przycisk A2B Style */
+    .stButton>button {
+        background-color: #22B1CC !important;
+        color: white !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        border: none !important;
+        width: 100%;
+        height: 45px;
+    }
+
+    /* Inputy i Selektory */
+    .stSelectbox, .stNumberInput {
+        color: white !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- INICJALIZACJA ---
+# --- STAN SESJI ---
 if 'nieobecnosci' not in st.session_state:
     st.session_state.nieobecnosci = []
 
-# --- SIDEBAR PRO ---
+# --- SIDEBAR (A2B FlowRoute Style) ---
 with st.sidebar:
-    # Uśmiechnięty profesjonalista w aucie (elegancki rysunek)
-    st.image("https://img.freepik.com/free-vector/businessman-driving-car_24877-50204.jpg?t=st=1716120000&exp=1716123600&hmac=elegant_drawing", use_container_width=True)
+    # Stylizowane LOGO A2B
+    st.markdown("""
+        <div style='text-align: center; padding: 10px; border: 2px solid #22B1CC; border-radius: 10px; margin-bottom: 20px;'>
+            <h1 style='color: #22B1CC; margin: 0; font-size: 28px;'>A2B</h1>
+            <p style='color: white; margin: 0; font-size: 14px; letter-spacing: 2px;'>FLOWROUTE</p>
+        </div>
+    """, unsafe_allow_html=True)
     
-    st.markdown("<h2 style='color: white; text-align: center; margin-bottom: 0;'>AutoTrasa</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #94A3B8; text-align: center; font-size: 0.8rem;'>System Zarządzania Cyklem Sprzedaży</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #94A3B8; text-align: center;'>Asystent Twojej Trasy</p>", unsafe_allow_html=True)
     st.write("---")
     
-    with st.expander("💼 PARAMETRY CYKLU", expanded=True):
-        typ_cyklu = st.selectbox("Długość", ["Miesiąc", "2 Miesiące", "Kwartał"])
-        wizyty_na_klienta = st.number_input("Wizyt u 1 klienta", min_value=1, value=1)
-        limit_dzienny = st.slider("Limit dzienny", 1, 30, 12)
-
-    with st.expander("📈 REALIZACJA"):
-        wizyty_wykonane = st.number_input("Zrobione wizyty", min_value=0, value=0)
-
-    st.write("---")
-    st.markdown("<p style='color: white; font-weight: 600;'>📅 PLANOWANIE WOLNEGO</p>", unsafe_allow_html=True)
-    wybrane = st.date_input("Zaznacz daty:", value=(), min_value=date(2025, 1, 1))
+    st.subheader("⚙️ Twój Cykl")
+    typ_cyklu = st.selectbox("Czas trwania", ["Miesiąc", "2 Miesiące", "Kwartał"])
+    wizyty_na_klienta = st.number_input("Wizyty u 1 klienta", min_value=1, value=1)
+    twoje_tempo = st.slider("Twoje tempo (wizyty/dzień)", 1, 30, 12)
     
-    if st.button("DODAJ DO HARMONOGRAMU"):
-        if isinstance(wybrane, (list, tuple)) and len(wybrane) > 0:
-            if len(wybrane) == 2:
-                start, end = wybrane
-                dni = [start + timedelta(days=x) for x in range((end-start).days + 1)]
-                st.session_state.nieobecnosci.append({'label': f"{start.strftime('%d.%m')} - {end.strftime('%d.%m')}", 'dni': dni})
+    st.write("---")
+    st.subheader("📉 Postęp dnia")
+    zrobione = st.number_input("Ile wizyt już za Tobą?", min_value=0, value=0)
+    
+    st.write("---")
+    st.subheader("📅 Planowane Wolne")
+    wybrane_daty = st.date_input("Zaznacz dni:", value=(), min_value=date(2025, 1, 1))
+    
+    if st.button("DODAJ DO PLANU"):
+        if isinstance(wybrane_daty, (list, tuple)) and len(wybrane_daty) > 0:
+            if len(wybrane_daty) == 2:
+                s, e = wybrane_daty
+                dni = [s + timedelta(days=x) for x in range((e-s).days + 1)]
+                st.session_state.nieobecnosci.append({'label': f"{s.strftime('%d.%m')} - {e.strftime('%d.%m')}", 'count': len(dni)})
             else:
-                d = wybrane[0]
-                st.session_state.nieobecnosci.append({'label': f"{d.strftime('%d.%m')}", 'dni': [d]})
+                st.session_state.nieobecnosci.append({'label': wybrane_daty[0].strftime('%d.%m'), 'count': 1})
             st.rerun()
 
-    # Wyświetlanie listy (nowoczesne tagi)
+    # Lista wolnych
     suma_wolnych = 0
     for i, g in enumerate(st.session_state.nieobecnosci):
-        with st.container():
-            c1, c2 = st.columns([4, 1])
-            c1.markdown(f"<span style='color: #CBD5E1; font-size: 0.85rem;'>• {g['label']}</span>", unsafe_allow_html=True)
-            if c2.button("✕", key=f"del_{i}"):
-                st.session_state.nieobecnosci.pop(i)
-                st.rerun()
-            suma_wolnych += len(g['dni'])
+        c1, c2 = st.columns([4, 1])
+        c1.markdown(f"<span style='color: #94A3B8; font-size: 0.9rem;'>🏝️ {g['label']}</span>", unsafe_allow_html=True)
+        if c2.button("✕", key=f"d_{i}"):
+            st.session_state.nieobecnosci.pop(i)
+            st.rerun()
+        suma_wolnych += g['count']
 
-# --- GŁÓWNY DASHBOARD ---
-# Hero Section
-st.markdown(f"""
-    <div class="hero-section">
-        <div style="font-size: 40px;">🏢</div>
+# --- PANEL GŁÓWNY ---
+st.markdown("""
+    <div class='header-container'>
         <div>
-            <h1 style="margin:0; font-size: 1.8rem; font-weight: 600;">Panel Kontrolny Cyklu</h1>
-            <p style="margin:0; color: #64748B;">Zoptymalizuj swoją trasę i monitoruj KPI w czasie rzeczywistym.</p>
+            <h2 style='margin:0; color: white;'>Cześć! Ruszamy w drogę? 👋</h2>
+            <p style='margin:0; color: #22B1CC; opacity: 0.9;'>A2B FlowRoute - Twój optymalny asystent trasy</p>
+        </div>
+        <div style='text-align: right;'>
+            <p style='margin:0; font-size: 1.2rem; font-weight: bold;'>v5.0 PRO</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-# File Uploader w formie eleganckiej strefy
-uploaded_file = st.file_uploader("", type=["csv"])
+uploaded_file = st.file_uploader("📂 Wgraj bazę klientów (CSV)", type=["csv"])
 
 if uploaded_file:
     raw_data = uploaded_file.read()
@@ -138,64 +137,58 @@ if uploaded_file:
     try:
         df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=charenc)
         
-        # OBLICZENIA LOGICZNE
+        # OBLICZENIA (Przyjazne)
         dni_p = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
         dni_n = max(0, dni_p[typ_cyklu] - suma_wolnych)
         cel_total = len(df) * wizyty_na_klienta
-        do_zrobienia = max(0, cel_total - wizyty_wykonane)
-        wymagana_srednia = do_zrobienia / dni_n if dni_n > 0 else 0
+        do_zrobienia = max(0, cel_total - zrobione)
+        srednia_na_dzien = do_zrobienia / dni_n if dni_n > 0 else 0
         
-        # --- TOP METRICS ---
+        # --- METRYKI (A2B Style) ---
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Klienci w bazie", f"{len(df)}", "Baza")
-        m2.metric("Dni robocze", f"{dni_n}", "Netto")
-        m3.metric("Pozostało wizyt", f"{do_zrobienia}", "Cel")
-        postep = round((wizyty_wykonane/cel_total*100), 1) if cel_total > 0 else 0
-        m4.metric("Realizacja", f"{postep}%", f"{wizyty_wykonane} / {cel_total}")
+        m1.metric("Klienci w bazie", f"{len(df)}", "Osoby/Punkty")
+        m2.metric("Dni robocze", f"{dni_n}", "Pozostało")
+        m3.metric("Zostało wizyt", f"{do_zrobienia}", "Cel")
+        postep_proc = round((zrobione/cel_total*100), 1) if cel_total > 0 else 0
+        m4.metric("Twój Postęp", f"{postep_proc}%", "W cyklu")
 
         # --- WYKRES GAUGE & ANALIZA ---
         st.write("---")
-        c_left, c_right = st.columns([2, 1])
+        cl, cr = st.columns([2, 1])
         
-        with c_left:
-            # Gauge w stylu Modern
+        with cl:
             fig = go.Figure(go.Indicator(
                 mode = "gauge+number",
-                value = wymagana_srednia,
-                number = {'font': {'color': "#1E293B", 'size': 50}},
-                title = {'text': "WYMAGANA WYDAJNOŚĆ DZIENNA", 'font': {'size': 14, 'color': '#64748B'}},
+                value = srednia_na_dzien,
+                title = {'text': "WYMAGANE TEMPO (WIZYTY / DZIEŃ)", 'font': {'color': '#1A2238'}},
                 gauge = {
-                    'axis': {'range': [None, 30], 'tickwidth': 1},
-                    'bar': {'color': "#3B82F6"},
+                    'axis': {'range': [None, 30]},
+                    'bar': {'color': "#22B1CC"},
                     'bgcolor': "white",
-                    'borderwidth': 0,
-                    'threshold': {'line': {'color': "#EF4444", 'width': 4}, 'thickness': 0.8, 'value': limit_dzienny}
+                    'threshold': {'line': {'color': "#1A2238", 'width': 4}, 'value': twoje_tempo}
                 }
             ))
-            fig.update_layout(height=350, margin=dict(l=30, r=30, t=50, b=20), paper_bgcolor="rgba(0,0,0,0)")
+            fig.update_layout(height=350, paper_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig, use_container_width=True)
-        
-        with c_right:
-            st.markdown("### 🛠️ Rekomendacje AI")
-            if wymagana_srednia > limit_dzienny:
-                st.warning(f"""
-                **Wykryto przeciążenie planu.** Średnia wymagana ({round(wymagana_srednia,1)}) przekracza Twój limit ({limit_dzienny}). 
-                Sugerujemy dodanie 1 dnia roboczego lub zwiększenie limitu o {round(wymagana_srednia - limit_dzienny,1)} wizyt.
+            
+        with cr:
+            st.markdown("### 💡 Wskazówki FlowRoute")
+            if srednia_na_dzien > twoje_tempo:
+                st.error(f"""
+                **Trzeba nieco przyspieszyć!** Twoje tempo ({twoje_tempo}) jest niższe niż wymagane ({round(srednia_na_dzien,1)}). 
+                Sugerujemy dodanie wizyty dziennie lub zmianę wolnych dni.
                 """)
             else:
                 st.success(f"""
-                **Plan zoptymalizowany.** Utrzymując obecne tempo, zrealizujesz cykl z wyprzedzeniem. 
-                Masz zapas operacyjny wynoszący {int((limit_dzienny * dni_n) - do_zrobienia)} wizyt.
+                **Jedziesz idealnie!** Utrzymując tempo {twoje_tempo} wizyt dziennie, skończysz cykl z zapasem **{int((twoje_tempo * dni_n) - do_zrobienia)}** wizyt.
+                Masz czas na spokojną kawę! ☕
                 """)
 
         # --- MAPA ---
         st.write("---")
-        st.markdown("<h3 style='margin-bottom: 20px;'>📍 Rozkład geograficzny punktów</h3>", unsafe_allow_html=True)
+        st.subheader("📍 Twoja dzisiejsza mapa")
         m = folium.Map(location=[52.0688, 19.4797], zoom_start=6, tiles="cartodbpositron")
-        st_folium(m, width=1300, height=550)
+        st_folium(m, width=1300, height=500)
 
     except Exception as e:
-        st.error(f"Krytyczny błąd przetwarzania: {e}")
-else:
-    # Ekran powitalny (Empty State)
-    st.info("Wgraj bazę danych (CSV), aby aktywować analizę inteligentną.")
+        st.error(f"Problem z plikiem: {e}")
