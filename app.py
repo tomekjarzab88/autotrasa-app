@@ -31,24 +31,31 @@ with st.sidebar:
     wizyty_na_klienta = st.number_input("Ile wizyt u 1 klienta w cyklu?", min_value=1, value=1)
     
     st.header("📅 Twoja dostępność")
+    # Kalendarz z obsługą wielu dat
     dni_wolne = st.date_input(
         "Zaznacz dni nieobecności (L4, Szkolenia, Urlopy)", 
         value=[dzis],
         min_value=date(2025, 1, 1)
     )
     
-    # Lista nieobecności
+    # --- POPRAWKA LOGIKI WYŚWIETLANIA DAT ---
+    ile_wolnych = 0
     if dni_wolne:
         st.write("---")
         st.subheader("🗓️ Zarejestrowane dni:")
-        if isinstance(dni_wolne, list):
+        
+        # Jeśli użytkownik wybrał kilka dat (lista)
+        if isinstance(dni_wolne, (list, tuple)):
             for d in sorted(dni_wolne):
                 prefix = "🔴" if d < dzis else "🔵"
                 st.write(f"{prefix} {d.strftime('%d.%m.%Y')}")
             ile_wolnych = len(dni_wolne)
+        # Jeśli użytkownik wybrał tylko jedną datę (pojedynczy obiekt date)
         else:
-            st.write(f"🔵 {dni_wolne.strftime('%d.%m.%Y')}")
+            prefix = "🔴" if dni_wolne < dzis else "🔵"
+            st.write(f"{prefix} {dni_wolne.strftime('%d.%m.%Y')}")
             ile_wolnych = 1
+            
         st.write(f"**Suma dni wolnych: {ile_wolnych}**")
 
 # --- WCZYTYWANIE PLIKU ---
@@ -66,7 +73,7 @@ if uploaded_file:
         col_ulica = find_column(df.columns, ['ulica', 'adres', 'street', 'addr', 'ul.'])
         col_id = find_column(df.columns, ['akronim', 'id', 'nazwa', 'kod'])
 
-        # --- PRZYWRÓCONY SUWAK LIMITU DZIENNEGO U GÓRY ---
+        # --- SUWAK LIMITU DZIENNEGO ---
         st.write("---")
         st.subheader("🚀 Twoja wydajność")
         limit_dzienny = st.select_slider(
@@ -84,17 +91,16 @@ if uploaded_file:
         realizacja_procent = (twoja_wydajnosc_suma / total_wizyt_do_zrobienia * 100) if total_wizyt_do_zrobienia > 0 else 0
         wymagana_srednia = total_wizyt_do_zrobienia / dni_robocze if dni_robocze > 0 else 0
 
-        # --- DASHBOARD STATYSTYK ---
+        # --- DASHBOARD ---
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Klienci w bazie", len(df))
-        m2.metric("Dni robocze netto", dni_robocze)
+        m2.metric("Dni robocze netto", max(0, dni_robocze))
         m3.metric("Suma wizyt do zrobienia", total_wizyt_do_zrobienia)
         
-        # Kolor wskaźnika realizacji
         delta_val = round(realizacja_procent - 100, 1)
         m4.metric("Realizacja Planu", f"{round(realizacja_procent, 1)}%", delta=f"{delta_val}%")
 
-        # --- WYKRES GAUGE Z PORÓWNANIEM ---
+        # --- WYKRES GAUGE ---
         c_left, c_right = st.columns([2, 1])
         with c_left:
             fig = go.Figure(go.Indicator(
@@ -115,20 +121,7 @@ if uploaded_file:
             st.write("### 📝 Analiza")
             if realizacja_procent < 100:
                 brakuje = int(total_wizyt_do_zrobienia - twoja_wydajnosc_suma)
-                st.error(f"Przy limicie {limit_dzienny} wizyt/dzień, zabraknie Ci **{brakuje}** wizyt do końca cyklu.")
+                st.error(f"Przy limicie {limit_dzienny} wizyt/dzień, zabraknie Ci **{max(0, brakuje)}** wizyt.")
             else:
                 zapas = int(twoja_wydajnosc_suma - total_wizyt_do_zrobienia)
-                st.success(f"Przy limicie {limit_dzienny} wizyt/dzień, masz **{zapas}** wizyt zapasu.")
-
-        # --- MAPA I TABELA ---
-        st.write("---")
-        st.subheader("📍 Podgląd lokalizacji")
-        if col_miasto and col_ulica:
-            m = folium.Map(location=[52.0688, 19.4797], zoom_start=6)
-            st_folium(m, width=1100, height=400)
-        
-        st.write("### 📋 Twoja Baza")
-        st.dataframe(df.head(10))
-
-    except Exception as e:
-        st.error(f"Błąd: {e}")
+                st.success(f
