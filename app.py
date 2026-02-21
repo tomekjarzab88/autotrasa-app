@@ -15,13 +15,12 @@ import numpy as np
 import io
 
 # --- KONFIGURACJA ---
-st.set_page_config(page_title="A2B FlowRoute LOGISTICS", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="A2B FlowRoute SPEED", layout="wide", initial_sidebar_state="expanded")
 
 # --- KOLORYSTYKA ---
 COLOR_CYAN = "#00C2CB"
 COLOR_NAVY_DARK = "#1A2238"
 COLOR_BG = "#1F293D"
-# Rozszerzona paleta kolorów dla 20+ dni
 DAILY_COLORS = ['blue', 'green', 'red', 'purple', 'orange', 'darkred', 'lightred', 'beige', 'darkblue', 'darkgreen', 'cadetblue', 'pink', 'lightblue', 'lightgreen', 'gray', 'black', 'darkpurple', 'darkorange']
 
 st.markdown(f"""
@@ -37,21 +36,49 @@ st.markdown(f"""
     div[data-testid="stMetricValue"] {{ color: {COLOR_NAVY_DARK} !important; font-size: 1.6rem !important; }}
     .stButton>button {{
         background: linear-gradient(135deg, {COLOR_CYAN} 0%, #00A0A8 100%) !important;
-        color: white !important; border-radius: 8px !important; font-weight: bold !important; width: 100%;
+        color: white !important; border-radius: 8px !important; font-weight: bold !important;
     }}
     </style>
     """, unsafe_allow_html=True)
 
-# --- INICJALIZACJA SESJI ---
-if 'nieobecnosci' not in st.session_state: st.session_state.nieobecnosci = []
-if 'trasa_data' not in st.session_state: st.session_state.trasa_data = None
-
-# --- FUNKCJE POMOCNICZE ---
+# --- FUNKCJE POMOCNICZE I CACHE ---
 def clean_address(text):
     if not isinstance(text, str): return ""
     rep = {'GÛ': 'Gó', 'Û': 'ó', 'Ã³': 'ó', 'Ä…': 'ą', 'Ä™': 'ę', 'Å›': 'ś', 'Ä‡': 'ć', 'Åº': 'ź', 'Å¼': 'ż', 'Å‚': 'ł', 'Å„': 'ń'}
     for k, v in rep.items(): text = text.replace(k, v)
     return re.sub(r'[^\w\s,.-]', '', text).strip()
+
+@st.cache_data(show_spinner=False)
+def get_coordinates(df_to_geo, col_u, col_m):
+    """Ta funkcja 'pamięta' wyniki. Raz zrobione, nie wymaga ponownego czekania."""
+    ua = f"A2B_Fast_Logistics_{random.randint(1,9999)}"
+    geolocator = Nominatim(user_agent=ua, timeout=10)
+    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1)
+    
+    coords = []
+    total = len(df_to_geo)
+    
+    # Tworzymy kontener na postęp (widoczny tylko podczas pierwszego ładowania)
+    p_bar = st.progress(0)
+    s_text = st.empty()
+    
+    for i, (_, row) in enumerate(df_to_geo.iterrows()):
+        addr = f"{row[col_u]}, {row[col_m]}, Polska"
+        try:
+            loc = geocode(addr)
+            if loc:
+                coords.append({'lat': loc.latitude, 'lon': loc.longitude, 'addr': addr, 'city': row[col_m], 'street': row[col_u]})
+        except:
+            pass
+        p_bar.progress((i + 1) / total)
+        s_text.text(f"Geolokalizacja: {i+1} / {total} punktów...")
+    
+    p_bar.empty()
+    s_text.empty()
+    return pd.DataFrame(coords)
+
+# --- INICJALIZACJA SESJI ---
+if 'nieobecnosci' not in st.session_state: st.session_state.nieobecnosci = []
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -59,35 +86,31 @@ with st.sidebar:
     except: st.markdown(f"<h2 style='color:{COLOR_CYAN}'>A2B FlowRoute</h2>", unsafe_allow_html=True)
     
     st.write("---")
-    typ_cyklu = st.selectbox("Długość cyklu", ["Miesiąc", "2 Miesiące", "Kwartał"])
-    wizyty_cel = st.number_input("Wizyt na klienta", min_value=1, value=1)
-    tempo = st.slider("Twoje tempo (dziennie)", 1, 30, 12)
-    zrobione = st.number_input("Wizyty już wykonane", min_value=0, value=0)
+    typ_cyklu = st.selectbox("Okres", ["Miesiąc", "2 Miesiące", "Kwartał"])
+    wizyty_cel = st.number_input("Wizyt / klienta", min_value=1, value=1)
+    tempo = st.slider("Twoje tempo", 1, 30, 12)
     
     st.write("---")
-    dni_input = st.date_input("Planuj wolne:", value=(), min_value=date(2025, 1, 1))
-    if st.button("➕ DODAJ WOLNE"):
+    dni_input = st.date_input("Dodaj wolne:", value=(), min_value=date.today())
+    if st.button("➕ DODAJ"):
         if isinstance(dni_input, (list, tuple)) and len(dni_input) > 0:
-            label = f"{dni_input[0].strftime('%d.%m')}" if len(dni_input)==1 else f"{dni_input[0].strftime('%d.%m')} - {dni_input[1].strftime('%d.%m')}"
-            st.session_state.nieobecnosci.append({'label': label, 'count': 1 if len(dni_input)==1 else (dni_input[1]-dni_input[0]).days + 1})
+            count = 1 if len(dni_input)==1 else (dni_input[1]-dni_input[0]).days + 1
+            st.session_state.nieobecnosci.append({'label': f"Wolne {len(st.session_state.nieobecnosci)+1}", 'count': count})
             st.rerun()
 
     suma_wolnych = sum(g['count'] for g in st.session_state.nieobecnosci)
-    for i, g in enumerate(st.session_state.nieobecnosci):
-        c1, c2 = st.columns([4, 1]); c1.caption(f"🏝️ {g['label']}")
-        if c2.button("X", key=f"d_{i}"): st.session_state.nieobecnosci.pop(i); st.rerun()
+    st.caption(f"Razem wolne: {suma_wolnych} dni")
 
 # --- PANEL GŁÓWNY ---
-st.markdown(f"<h1 style='margin:0;'>Optymalizacja Trasy dla {date.today().year}</h1>", unsafe_allow_html=True)
+st.title("🚀 A2B FlowRoute - Asystent Logistyczny")
 
 uploaded_file = st.file_uploader("📂 Wgraj bazę (Excel lub CSV)", type=["csv", "xlsx", "xls"])
 
 if uploaded_file:
     try:
-        # 1. WCZYTYWANIE
         if uploaded_file.name.endswith('.csv'):
-            raw_data = uploaded_file.read(); detection = chardet.detect(raw_data); uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=detection['encoding'] if detection['confidence'] > 0.5 else 'utf-8-sig')
+            raw_data = uploaded_file.read(); det = chardet.detect(raw_data); uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=det['encoding'] if det['confidence'] > 0.5 else 'utf-8-sig')
         else:
             df = pd.read_excel(uploaded_file)
         
@@ -99,85 +122,47 @@ if uploaded_file:
             df_unique[col_m] = df_unique[col_m].apply(clean_address)
             df_unique[col_u] = df_unique[col_u].apply(clean_address)
             
+            # Parametry trasy
             dni_p = {"Miesiąc": 21, "2 Miesiące": 42, "Kwartał": 63}
             dni_n = max(1, dni_p[typ_cyklu] - suma_wolnych)
             
-            st.info(f"📊 Baza: **{len(df_unique)}** punktów. Czas planowania: ok. **{round(len(df_unique)*1.3/60, 1)} min**.")
+            st.info(f"📍 Baza: **{len(df_unique)}** aptek | Planowanie na: **{dni_n}** dni.")
             
-            # 2. PRZYCISK STARTU
-            if st.button("🚀 URUCHOM OPTYMALIZACJĘ (348 PUNKTÓW)"):
-                with st.container():
-                    st.warning("⚠️ Nie zamykaj tej strony! Trwa geolokalizacja...")
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
+            if st.button("🗺️ GENERUJ I OPTYMALIZUJ TRASĘ"):
+                with st.spinner("Przetwarzanie danych..."):
+                    # POBIERANIE KOORDYNATÓW (Z CACHE)
+                    points_df = get_coordinates(df_unique, col_u, col_m)
                     
-                    ua = f"A2B_Final_Logistics_{random.randint(1,999)}"
-                    geolocator = Nominatim(user_agent=ua, timeout=10)
-                    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
-                    
-                    coords = []
-                    for idx, row in df_unique.iterrows():
-                        addr = f"{row[col_u]}, {row[col_m]}, Polska"
-                        try:
-                            loc = geocode(addr)
-                            if loc:
-                                coords.append({'lat': loc.latitude, 'lon': loc.longitude, 'addr': addr, 'city': row[col_m], 'street': row[col_u]})
-                        except:
-                            pass
-                        
-                        progress = len(coords) / len(df_unique)
-                        progress_bar.progress(progress)
-                        status_text.text(f"Przetworzono: {len(coords)} / {len(df_unique)} punktów...")
-
-                    if coords:
-                        points_df = pd.DataFrame(coords)
+                    if not points_df.empty:
+                        # KLASTROWANIE NA DNI
                         n_clusters = min(dni_n, len(points_df))
                         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
                         points_df['dzien'] = kmeans.fit_predict(points_df[['lat', 'lon']])
                         
-                        st.session_state.trasa_data = points_df
-                        st.rerun()
-
-            # 3. WYŚWIETLANIE GOTOWEJ TRASY (Jeśli jest w sesji)
-            if st.session_state.trasa_data is not None:
-                df_res = st.session_state.trasa_data
-                
-                st.success(f"✅ Plan gotowy! Podzielono {len(df_res)} punktów na {int(df_res['dzien'].max()+1)} dni roboczych.")
-                
-                tab1, tab2, tab3 = st.tabs(["🗺️ Mapa Logistyczna", "📅 Plan Dnia", "📥 Eksport danych"])
-                
-                with tab1:
-                    m = folium.Map(location=[df_res['lat'].mean(), df_res['lon'].mean()], zoom_start=7, tiles="cartodbpositron")
-                    for _, row in df_res.iterrows():
-                        color = DAILY_COLORS[int(row['dzien']) % len(DAILY_COLORS)]
-                        folium.CircleMarker(
-                            location=[row['lat'], row['lon']],
-                            radius=8, color=color, fill=True, fill_color=color,
-                            popup=f"Dzień {int(row['dzien'])+1}: {row['addr']}"
-                        ).add_to(m)
-                    st_folium(m, width=1300, height=600)
-                
-                with tab2:
-                    col_day = st.selectbox("Wybierz dzień do podglądu:", range(1, int(df_res['dzien'].max()+2)))
-                    day_df = df_res[df_res['dzien'] == (col_day-1)]
-                    st.write(f"### 📍 Zadania na Dzień {col_day} ({len(day_df)} wizyt)")
-                    st.table(day_df[['street', 'city']])
-                
-                with tab3:
-                    # Eksport do Excela
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df_res.to_excel(writer, index=False, sheet_name='Plan_A2B')
-                    st.download_button(
-                        label="📥 POBIERZ PEŁNY PLAN (EXCEL)",
-                        data=output.getvalue(),
-                        file_name=f"plan_trasy_{date.today()}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-
+                        # Sortowanie wewnątrz dni (północ -> południe), aby trasa miała sens
+                        points_df = points_df.sort_values(by=['dzien', 'lat'], ascending=[True, False])
+                        
+                        # WYŚWIETLANIE
+                        t1, t2 = st.tabs(["🗺️ MAPA ZONALNA", "📅 PLANER DNIOWY"])
+                        
+                        with t1:
+                            m = folium.Map(location=[points_df['lat'].mean(), points_df['lon'].mean()], zoom_start=7, tiles="cartodbpositron")
+                            for _, row in points_df.iterrows():
+                                color = DAILY_COLORS[int(row['dzien']) % len(DAILY_COLORS)]
+                                folium.CircleMarker(
+                                    location=[row['lat'], row['lon']], radius=10, color=color, fill=True, fill_color=color,
+                                    popup=f"Dzień {int(row['dzien'])+1}: {row['addr']}"
+                                ).add_to(m)
+                            st_folium(m, width=1200, height=600)
+                        
+                        with t2:
+                            for d in range(n_clusters):
+                                with st.expander(f"📍 DZIEŃ {d+1}"):
+                                    day_pts = points_df[points_df['dzien'] == d]
+                                    st.table(day_pts[['street', 'city']])
+                    else:
+                        st.error("Błąd lokalizacji adresów.")
         else:
             st.error("W pliku brakuje kolumn Miasto lub Ulica.")
     except Exception as e:
-        st.error(f"Coś poszło nie tak: {e}")
-else:
-    st.info("👋 Wgraj plik z aptekami. A2B FlowRoute przeanalizuje 348 adresów i ułoży z nich 17 dniowych pętli.")
+        st.error(f"Błąd: {e}")
