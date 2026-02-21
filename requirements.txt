@@ -6,3 +6,4 @@ folium
 streamlit-folium
 geopy
 openpyxl
+scikit-learn
