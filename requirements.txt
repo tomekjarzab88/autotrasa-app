@@ -4,3 +4,4 @@ chardet
 plotly
 folium
 streamlit-folium
+geopy
