@@ -13,6 +13,7 @@ import random
 import re
 import numpy as np
 import io
+import math
 
 # --- KONFIGURACJA ---
 st.set_page_config(page_title="A2B FlowRoute PRO", layout="wide", initial_sidebar_state="expanded")
@@ -73,7 +74,7 @@ with st.sidebar:
     except: st.markdown(f"<h2 style='color:{COLOR_CYAN}'>A2B FlowRoute</h2>", unsafe_allow_html=True)
     
     st.write("---")
-    dom_adres = st.text_input("📍 Twoje miejsce zamieszkania", "Kielce, Polska")
+    dom_adres = st.text_input("📍 Twój punkt startowy", "Kielce, Polska")
     typ_cyklu = st.selectbox("Długość cyklu", ["Miesiąc", "2 Miesiące", "Kwartał"])
     wizyty_cel = st.number_input("Wizyt na klienta", min_value=1, value=1)
     tempo = st.slider("Twoje tempo (wizyty/dzień)", 1, 30, 12)
@@ -98,7 +99,7 @@ with st.sidebar:
         st.rerun()
 
 # --- PANEL GŁÓWNY ---
-st.title("📅 Kalendarz Trasy Optymalnej")
+st.title("📅 Kalendarz Trasy Optymalnej v10.7")
 
 uploaded_file = st.file_uploader("📂 Wgraj bazę (Excel lub CSV)", type=["csv", "xlsx", "xls"])
 
@@ -118,28 +119,30 @@ if uploaded_file:
         col_u = next((c for c in df.columns if 'ulica' in c.lower() or 'adres' in c.lower()), None)
 
         if col_m and col_u:
-            df_clean = df.drop_duplicates(subset=[col_m, col_u]).copy()
+            # Poprawione czyszczenie dubli (case-insensitive)
+            df['temp_addr'] = df[col_u].astype(str).str.upper() + df[col_m].astype(str).str.upper()
+            df_clean = df.drop_duplicates(subset=['temp_addr']).copy()
             df_clean[col_m] = df_clean[col_m].apply(fix_polish)
             df_clean[col_u] = df_clean[col_u].apply(fix_polish)
             
-            n_punkty = len(df_clean)
-            cel_wizyt = (n_punkty * wizyty_cel) - zrobione
+            cel_wizyt = (len(df_clean) * wizyty_cel) - zrobione
             
-            st.info(f"📋 Apteki: **{n_punkty}**. Do celu: **{cel_wizyt}** wizyt. Tempo: **{tempo}**/dzień.")
+            st.info(f"📋 Apteki unikalne: **{len(df_clean)}**. Tempo: **{tempo}**/dzień.")
 
-            if st.button("🚀 GENERUJ OPTYMALNY HARMONOGRAM"):
+            if st.button("🚀 GENERUJ SEKTOROWY HARMONOGRAM"):
                 coords = []
                 bar = st.progress(0); counter = st.empty()
                 
-                ua = f"A2B_Route_v106_{random.randint(1,9999)}"
+                ua = f"A2B_Radial_v107_{random.randint(1,9999)}"
                 geolocator = Nominatim(user_agent=ua, timeout=10)
                 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
                 
                 home_loc = geolocator.geocode(dom_adres)
                 if not home_loc:
-                    st.error("Nie znaleziono adresu zamieszkania.")
+                    st.error("Błąd lokalizacji domu.")
                     st.stop()
                 st.session_state.home_coords = (home_loc.latitude, home_loc.longitude)
+                h_lat, h_lon = st.session_state.home_coords
                 
                 total = len(df_clean)
                 for i, (_, row) in enumerate(df_clean.iterrows()):
@@ -150,48 +153,27 @@ if uploaded_file:
                     try:
                         loc = geocode(addr)
                         if loc:
+                            # Obliczanie kąta względem domu (Radial)
+                            # atan2(y, x) daje kąt w radianach
+                            angle = math.atan2(loc.latitude - h_lat, loc.longitude - h_lon)
+                            dist = geodesic((h_lat, h_lon), (loc.latitude, loc.longitude)).km
                             coords.append({
                                 'lat': loc.latitude, 'lon': loc.longitude, 
-                                'addr': addr, 'city': row[col_m], 'street': row[col_u]
+                                'angle': angle, 'dist': dist, 'addr': addr, 
+                                'city': row[col_m], 'street': row[col_u]
                             })
                     except: pass
 
                 if coords:
-                    # --- NOWY ALGORYTM: NEAREST NEIGHBOR PER DAY ---
-                    unvisited = coords.copy()
-                    planned_points = []
-                    current_day_idx = 0
+                    # NOWA LOGIKA: Sortowanie po kącie (Sektory), a potem po dystansie
+                    # To grupuje apteki w "kliny" wychodzące z Kielc
+                    pdf = pd.DataFrame(coords)
+                    pdf = pdf.sort_values(by=['angle', 'dist'], ascending=[True, True]).reset_index(drop=True)
                     
-                    while unvisited:
-                        # Zaczynamy dzień od szukania punktu najbliższego DOMU
-                        home = st.session_state.home_coords
-                        # Znajdź pierwszy punkt dnia (najbliższy domu)
-                        closest_to_home = min(unvisited, key=lambda x: geodesic(home, (x['lat'], x['lon'])).km)
-                        
-                        # Budujemy trasę na ten dzień (maksymalnie 'tempo' wizyt)
-                        current_pos = (closest_to_home['lat'], closest_to_home['lon'])
-                        day_route = []
-                        
-                        for _ in range(tempo):
-                            if not unvisited: break
-                            
-                            # Szukaj najbliższego sąsiada od aktualnej pozycji
-                            next_point = min(unvisited, key=lambda x: geodesic(current_pos, (x['lat'], x['lon'])).km)
-                            
-                            # Oblicz dystans od domu dla metryk
-                            dist_home = geodesic(home, (next_point['lat'], next_point['lon'])).km
-                            next_point['dist_home'] = dist_home
-                            next_point['dzien_idx'] = current_day_idx
-                            
-                            day_route.append(next_point)
-                            unvisited.remove(next_point)
-                            current_pos = (next_point['lat'], next_point['lon'])
-                        
-                        planned_points.extend(day_route)
-                        current_day_idx += 1
+                    pdf['dzien_idx'] = pdf.index // tempo
+                    n_dni = int(pdf['dzien_idx'].max() + 1)
                     
-                    pdf = pd.DataFrame(planned_points)
-                    working_dates = generate_working_dates(date.today(), current_day_idx, st.session_state.nieobecnosci_daty)
+                    working_dates = generate_working_dates(date.today(), n_dni, st.session_state.nieobecnosci_daty)
                     date_map = {i: working_dates[i] for i in range(len(working_dates))}
                     pdf['data_wizyty'] = pdf['dzien_idx'].map(date_map)
                     
@@ -202,7 +184,7 @@ if uploaded_file:
                 res = st.session_state.trasa_wynikowa
                 all_dates = sorted(res['data_wizyty'].unique())
                 
-                t1, t2, t3 = st.tabs(["🗺️ Mapa", "📅 Harmonogram Zbiorczy", "📥 Eksport"])
+                t1, t2, t3 = st.tabs(["🗺️ Mapa Sektorowa", "📅 Harmonogram", "📥 Eksport"])
                 
                 with t1:
                     m = folium.Map(location=[res['lat'].mean(), res['lon'].mean()], zoom_start=7, tiles="cartodbpositron")
@@ -211,22 +193,22 @@ if uploaded_file:
                         color = DAILY_COLORS[all_dates.index(row['data_wizyty']) % len(DAILY_COLORS)]
                         folium.CircleMarker(
                             location=[row['lat'], row['lon']], radius=10, color=color, fill=True, fill_color=color,
-                            popup=f"Data: {row['data_wizyty']}<br>Punkt w trasie"
+                            popup=f"Data: {row['data_wizyty']}<br>Kierunek: {round(math.degrees(row['angle']),0)}°"
                         ).add_to(m)
-                    st_folium(m, width=1300, height=600, key="fixed_map_v106")
+                    st_folium(m, width=1300, height=600, key="fixed_map_v107")
                 
                 with t2:
                     for d in all_dates:
                         day_pts = res[res['data_wizyty'] == d]
                         with st.expander(f"📅 {d.strftime('%A, %d.%m.%Y')} — ({len(day_pts)} wizyt)"):
                             for _, p in day_pts.iterrows():
-                                st.markdown(f"<div class='calendar-card'>📍 <b>{p['street']}</b>, {p['city']} ({round(p['dist_home'], 1)} km od domu)</div>", unsafe_allow_html=True)
+                                st.markdown(f"<div class='calendar-card'>📍 <b>{p['street']}</b>, {p['city']} ({round(p['dist'], 1)} km)</div>", unsafe_allow_html=True)
                 
                 with t3:
                     out = io.BytesIO()
                     with pd.ExcelWriter(out, engine='openpyxl') as wr:
-                        res[['data_wizyty', 'street', 'city', 'addr']].to_excel(wr, index=False)
-                    st.download_button(label="📥 POBIERZ PLAN", data=out.getvalue(), file_name="Plan_A2B.xlsx")
+                        res[['data_wizyty', 'street', 'city', 'dist', 'addr']].to_excel(wr, index=False)
+                    st.download_button(label="📥 POBIERZ PLAN", data=out.getvalue(), file_name="Plan_A2B_v107.xlsx")
         else:
             st.error("Brak kolumn adresowych.")
     except Exception as e:
