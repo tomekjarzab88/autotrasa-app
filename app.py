@@ -14,17 +14,25 @@ import re
 import io
 import math
 
-# --- KONFIGURACJA SUPABASE (Z SECRETS) ---
+# --- 1. GLOBALNA INICJALIZACJA PAMIĘCI (ZAPOBIEGA BŁĘDOM ATTRIBUTEERROR) ---
+if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+if 'user_id' not in st.session_state: st.session_state.user_id = None
+if 'trasa_wynikowa' not in st.session_state: st.session_state.trasa_wynikowa = None
+if 'home_coords' not in st.session_state: st.session_state.home_coords = None
+if 'db_loaded' not in st.session_state: st.session_state.db_loaded = False
+if 'home_address_saved' not in st.session_state: st.session_state.home_address_saved = "Kielce, Polska"
+
+# --- 2. KONFIGURACJA SUPABASE ---
 try:
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(url, key)
 except Exception as e:
-    st.error("Błąd konfiguracji bazy danych. Sprawdź 'Secrets' w Streamlit Cloud.")
+    st.error("❌ Brak konfiguracji Secrets w Streamlit Cloud! Dodaj SUPABASE_URL i SUPABASE_KEY.")
     st.stop()
 
-# --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="A2B FlowRoute PRO", layout="wide", initial_sidebar_state="expanded")
+# --- 3. KONFIGURACJA STRONY ---
+st.set_page_config(page_title="A2B FlowRoute PRO v11.1", layout="wide", initial_sidebar_state="expanded")
 
 COLOR_CYAN = "#00C2CB"
 COLOR_NAVY_DARK = "#1A2238"
@@ -53,7 +61,7 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNKCJE BAZY DANYCH ---
+# --- 4. FUNKCJE POMOCNICZE ---
 def save_plan_to_db(user_id, df, home_addr):
     try:
         data = {
@@ -64,7 +72,7 @@ def save_plan_to_db(user_id, df, home_addr):
         }
         supabase.table("user_data").upsert(data).execute()
     except Exception as e:
-        st.sidebar.error(f"Nie udało się zapisać w chmurze: {e}")
+        st.sidebar.error(f"⚠️ Błąd zapisu: {e}")
 
 def load_plan_from_db(user_id):
     try:
@@ -73,7 +81,6 @@ def load_plan_from_db(user_id):
     except:
         return None
 
-# --- FUNKCJE LOGISTYCZNE ---
 def fix_polish(text):
     if not isinstance(text, str): return ""
     rep = {'GÛ': 'Gó', 'Û': 'ó', 'Ã³': 'ó', 'Ä…': 'ą', 'Ä™': 'ę', 'Å›': 'ś', 'Ä‡': 'ć', 'Åº': 'ź', 'Å¼': 'ż', 'Å‚': 'ł', 'Å„': 'ń'}
@@ -95,59 +102,59 @@ def create_gmaps_url(home_coords, day_points):
     pts = "/".join([f"{p['lat']},{p['lon']}" for _, p in day_points.iterrows()])
     return f"{base_url}{origin}/{pts}"
 
-# --- SYSTEM LOGOWANIA ---
-if 'logged_in' not in st.session_state: st.session_state.logged_in = False
-
+# --- 5. SYSTEM LOGOWANIA ---
 if not st.session_state.logged_in:
     st.title("🛡️ A2B FlowRoute PRO")
-    st.subheader("Zaloguj się, aby uzyskać dostęp do swoich tras")
+    st.subheader("Zaloguj się do swojego konta")
     
     col_login, _ = st.columns([1, 2])
     with col_login:
-        user_id = st.text_input("ID Użytkownika")
-        password = st.text_input("Hasło", type="password")
+        u_id = st.text_input("ID Użytkownika")
+        pwd = st.text_input("Hasło", type="password")
         
         if st.button("Zaloguj"):
-            if user_id == "a2b_admin" and password == "polska2025": # Przykładowe dane
+            if u_id == "a2b_admin" and pwd == "polska2025":
                 st.session_state.logged_in = True
-                st.session_state.user_id = user_id
+                st.session_state.user_id = u_id
                 st.rerun()
             else:
                 st.error("Błędne dane logowania.")
     st.stop()
 
-# --- ZAŁADOWANIE DANYCH Z BAZY PO LOGOWANIU ---
-if 'db_loaded' not in st.session_state:
+# --- 6. SYNCHRONIZACJA Z BAZĄ (TYLKO RAZ PO LOGOWANIU) ---
+if st.session_state.logged_in and not st.session_state.db_loaded:
     saved = load_plan_from_db(st.session_state.user_id)
     if saved:
-        st.session_state.trasa_wynikowa = pd.read_json(saved['route_json'])
-        st.session_state.home_address_saved = saved['home_address']
+        try:
+            st.session_state.trasa_wynikowa = pd.read_json(saved['route_json'])
+            st.session_state.home_address_saved = saved['home_address']
+        except:
+            pass
     st.session_state.db_loaded = True
 
-# --- GŁÓWNA APLIKACJA ---
+# --- 7. SIDEBAR ---
 with st.sidebar:
     st.markdown(f"👤 **Użytkownik:** {st.session_state.user_id}")
-    if st.button("Wyloguj"):
+    if st.button("Wyloguj się"):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
     
     st.write("---")
-    dom_default = getattr(st.session_state, 'home_address_saved', "Kielce, Polska")
-    dom_adres = st.text_input("📍 Twoje miejsce zamieszkania", dom_default)
+    dom_adres = st.text_input("📍 Twoje miejsce zamieszkania", st.session_state.home_address_saved)
     
     typ_cyklu = st.selectbox("Długość cyklu", ["Miesiąc", "2 Miesiące", "Kwartał"])
     wizyty_cel = st.number_input("Wizyt na klienta", min_value=1, value=1)
     tempo = st.slider("Twoje tempo (wizyty/dzień)", 1, 30, 12)
     zrobione = st.number_input("Wizyty już wykonane", min_value=0, value=0)
     
-    if st.button("🗑️ RESETUJ PLAN"):
+    if st.button("🗑️ WYCZYŚĆ OBECNY PLAN"):
         st.session_state.trasa_wynikowa = None
         st.rerun()
 
-# --- PANEL GŁÓWNY ---
+# --- 8. PANEL GŁÓWNY ---
 st.title("📅 Twój Inteligentny Kalendarz PRO")
 
-uploaded_file = st.file_uploader("📂 Wgraj nową bazę aptek", type=["xlsx", "csv"])
+uploaded_file = st.file_uploader("📂 Wgraj bazę aptek (XLSX / CSV)", type=["xlsx", "csv"])
 
 if uploaded_file:
     try:
@@ -165,16 +172,16 @@ if uploaded_file:
             df_clean[col_m] = df_clean[col_m].apply(fix_polish)
             df_clean[col_u] = df_clean[col_u].apply(fix_polish)
             
-            st.info(f"📋 Znaleziono **{len(df_clean)}** unikalnych aptek.")
+            st.info(f"📋 Baza zawiera **{len(df_clean)}** unikalnych aptek.")
 
-            if st.button("🚀 GENERUJ I ZAPISZ W CHMURZE"):
+            if st.button("🚀 GENERUJ NOWY PLAN I ZAPISZ W CHMURZE"):
                 coords = []
                 bar = st.progress(0); counter = st.empty()
-                geolocator = Nominatim(user_agent=f"A2B_PRO_{random.randint(1,999)}", timeout=10)
+                geolocator = Nominatim(user_agent=f"A2B_v111_{random.randint(1,999)}", timeout=10)
                 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
                 
                 home_loc = geolocator.geocode(dom_adres)
-                if not home_loc: st.error("Błąd adresu startowego."); st.stop()
+                if not home_loc: st.error("Błąd lokalizacji domu."); st.stop()
                 h_lat, h_lon = home_loc.latitude, home_loc.longitude
                 st.session_state.home_coords = (h_lat, h_lon)
                 
@@ -200,12 +207,12 @@ if uploaded_file:
                     
                     st.session_state.trasa_wynikowa = pdf
                     save_plan_to_db(st.session_state.user_id, pdf, dom_adres)
-                    st.success("✅ Trasa zapisana w Twojej chmurze!")
+                    st.success("☁️ Trasa zsynchronizowana z bazą danych!")
                     st.rerun()
-    except Exception as e: st.error(f"Błąd pliku: {e}")
+    except Exception as e: st.error(f"Błąd przetwarzania: {e}")
 
-# --- WYŚWIETLANIE ZAPISANYCH DANYCH ---
-if st.session_state.trasa_wynikowa is not None:
+# --- 9. WIZUALIZACJA (TYLKO JEŚLI DANE ISTNIEJĄ) ---
+if st.session_state.get('trasa_wynikowa') is not None:
     res = st.session_state.trasa_wynikowa
     all_dates = sorted(res['data_wizyty'].unique())
     
@@ -213,18 +220,22 @@ if st.session_state.trasa_wynikowa is not None:
     
     with t1:
         m = folium.Map(location=[52.0, 19.0], zoom_start=6, tiles="cartodbpositron")
+        # Jeśli mamy współrzędne domu, dodaj pinezkę
+        if st.session_state.get('home_coords'):
+            folium.Marker(location=st.session_state.home_coords, icon=folium.Icon(color='red', icon='home')).add_to(m)
+            
         for _, row in res.iterrows():
             color = DAILY_COLORS[all_dates.index(row['data_wizyty']) % len(DAILY_COLORS)]
             folium.CircleMarker(location=[row['lat'], row['lon']], radius=10, color=color, fill=True, popup=f"{row['data_wizyty']}").add_to(m)
-        st_folium(m, width=1300, height=600)
+        st_folium(m, width=1300, height=600, key="main_map")
     
     with t2:
         for d in all_dates:
             day_pts = res[res['data_wizyty'] == d]
             with st.expander(f"📅 {d.strftime('%A, %d.%m.%Y')} — ({len(day_pts)} wizyt)"):
-                # Przycisk nawigacji (wymaga home_coords, jeśli nie ma w sesji, próbujemy wyliczyć średnią rejonu)
-                h_c = getattr(st.session_state, 'home_coords', (50.87, 20.63)) 
+                # Próba uzyskania home_coords do nawigacji
+                h_c = st.session_state.get('home_coords', (50.87, 20.63))
                 gmaps_url = create_gmaps_url(h_c, day_pts)
-                st.markdown(f'<a href="{gmaps_url}" target="_blank" class="maps-link">🚗 NAWIGUJ CAŁĄ TRASĘ</a>', unsafe_allow_html=True)
+                st.markdown(f'<a href="{gmaps_url}" target="_blank" class="maps-link">🚗 URUCHOM NAWIGACJĘ GOOGLE MAPS</a>', unsafe_allow_html=True)
                 for _, p in day_pts.iterrows():
                     st.markdown(f"<div class='calendar-card'>📍 <b>{p['street']}</b>, {p['city']}</div>", unsafe_allow_html=True)
