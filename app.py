@@ -8,12 +8,13 @@ from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.distance import geodesic
 from supabase import create_client, Client
-from streamlit_geolocation import streamlit_geolocation # NOWOŚĆ
+from streamlit_geolocation import streamlit_geolocation
 import time
 import random
 import re
 import io
 import math
+import urllib.parse
 
 # --- 1. GLOBALNA INICJALIZACJA ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
@@ -23,6 +24,7 @@ if 'home_coords' not in st.session_state: st.session_state.home_coords = None
 if 'nieobecnosci_daty' not in st.session_state: st.session_state.nieobecnosci_daty = []
 if 'db_loaded' not in st.session_state: st.session_state.db_loaded = False
 if 'home_address_saved' not in st.session_state: st.session_state.home_address_saved = "Kielce, Polska"
+if 'curr_gps' not in st.session_state: st.session_state.curr_gps = None
 
 # --- 2. KONFIGURACJA SUPABASE ---
 try:
@@ -30,7 +32,7 @@ try:
     key = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(url, key)
 except Exception as e:
-    st.error("❌ Błąd Secrets! Sprawdź SUPABASE_URL i SUPABASE_KEY.")
+    st.error("❌ Błąd konfiguracji bazy danych w Secrets.")
     st.stop()
 
 # --- 3. KONFIGURACJA STRONY ---
@@ -56,9 +58,10 @@ st.markdown(f"""
         padding: 10px; margin-bottom: 5px; border-radius: 5px;
     }}
     .maps-link {{
-        display: inline-block; padding: 10px 20px; background-color: #4285F4;
-        color: white !important; text-decoration: none; border-radius: 5px;
+        display: inline-block; padding: 12px 24px; background-color: #4285F4;
+        color: white !important; text-decoration: none; border-radius: 8px;
         font-weight: bold; margin-bottom: 15px; text-align: center; width: 100%;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.2);
     }}
     </style>
     """, unsafe_allow_html=True)
@@ -74,7 +77,7 @@ def save_plan_to_db(user_id, df, home_addr, blocked_dates):
             "blocked_dates": [d.isoformat() for d in blocked_dates] if blocked_dates else []
         }
         supabase.table("user_data").upsert(data).execute()
-    except Exception as e: st.sidebar.error(f"⚠️ Błąd zapisu: {e}")
+    except Exception as e: st.sidebar.error(f"⚠️ Błąd zapisu w chmurze: {e}")
 
 def load_plan_from_db(user_id):
     try:
@@ -96,15 +99,22 @@ def generate_working_dates(start_from, count, blocked_dates):
         curr += timedelta(days=1)
     return working_days
 
-# UDOSKONALONA FUNKCJA: Start z "My+Location"
-def create_gmaps_url(day_points):
-    """Tworzy link do Google Maps używając obecnej pozycji jako startu."""
-    # Używamy formatu https://www.google.com/maps/dir/?api=1 dla lepszej kompatybilności
-    base = "https://www.google.com/maps/dir/?api=1&origin=My+Location"
-    # Pobieramy punkty i łączymy je w format Google
-    dest = f"{day_points.iloc[-1]['lat']},{day_points.iloc[-1]['lon']}"
-    waypoints = "|".join([f"{p['lat']},{p['lon']}" for _, p in day_points.iloc[:-1].iterrows()])
-    return f"{base}&destination={dest}&waypoints={waypoints}"
+# UDOSKONALONA FUNKCJA: Generowanie trasy jako sekwencji celów
+def create_gmaps_url(day_points, current_gps=None):
+    """Tworzy URL trasy, gdzie każdy punkt jest celem (Destination)."""
+    base = "https://www.google.com/maps/dir/"
+    
+    # 1. Start: Współrzędne GPS lub tekstowy placeholder
+    start = f"{current_gps[0]},{current_gps[1]}" if current_gps else "Moja+lokalizacja"
+    
+    # 2. Przystanki: Lista adresów sformatowana dla Google Maps
+    stops = [start]
+    for _, p in day_points.iterrows():
+        # Używamy formatu Ulica, Miasto, Polska
+        addr_str = urllib.parse.quote(f"{p['street']}, {p['city']}, Polska")
+        stops.append(addr_str)
+    
+    return base + "/".join(stops)
 
 # --- 5. LOGOWANIE ---
 if not st.session_state.logged_in:
@@ -138,19 +148,16 @@ with st.sidebar:
     try: st.image("assets/logo_a2b.png", use_container_width=True)
     except: st.markdown(f"<h2 style='color:{COLOR_CYAN}'>A2B FlowRoute</h2>", unsafe_allow_html=True)
     
-    st.markdown(f"👤 **Witaj:** {st.session_state.user_id}")
+    st.markdown(f"👤 **Zalogowany:** {st.session_state.user_id}")
     
-    # NOWOŚĆ: AUTOMATYCZNA LOKALIZACJA
     st.write("---")
-    st.write("📍 **Twój punkt startowy**")
+    st.write("📍 **Twoja lokalizacja live**")
     location = streamlit_geolocation()
     if location and location.get('latitude'):
-        curr_lat = location['latitude']
-        curr_lon = location['longitude']
-        st.session_state.home_address_saved = f"{curr_lat}, {curr_lon}"
-        st.success(f"Wykryto lokalizację: {round(curr_lat,3)}, {round(curr_lon,3)}")
+        st.session_state.curr_gps = (location['latitude'], location['longitude'])
+        st.success(f"GPS Aktywny: {round(location['latitude'],3)}, {round(location['longitude'],3)}")
     
-    dom_adres = st.text_input("Adres startowy (miasto lub współrzędne):", st.session_state.home_address_saved)
+    dom_adres = st.text_input("Główny punkt startowy (dom):", st.session_state.home_address_saved)
     
     st.write("---")
     typ_cyklu = st.selectbox("Długość cyklu", ["Miesiąc", "2 Miesiące", "Kwartał"])
@@ -159,8 +166,8 @@ with st.sidebar:
     zrobione = st.number_input("Wizyty już wykonane", min_value=0, value=0)
     
     st.write("---")
-    dni_input = st.date_input("Zaznacz wolne/urlop/L4:", value=(), min_value=date.today())
-    if st.button("➕ DODAJ DO KALENDARZA"):
+    dni_input = st.date_input("Urlopy / Szkolenia / L4:", value=(), min_value=date.today())
+    if st.button("➕ DODAJ DO PLANU"):
         if isinstance(dni_input, (list, tuple)) and len(dni_input) > 0:
             if len(dni_input) == 2:
                 s, e = dni_input
@@ -180,8 +187,8 @@ with st.sidebar:
         st.rerun()
 
 # --- 8. PANEL GŁÓWNY ---
-st.title("📅 Twój Inteligentny Kalendarz PRO v11.4")
-uploaded_file = st.file_uploader("📂 Wgraj bazę aptek (XLSX / CSV)", type=["xlsx", "csv"])
+st.title("📅 Inteligentny Kalendarz A2B PRO v11.5")
+uploaded_file = st.file_uploader("📂 Wgraj bazę aptek", type=["xlsx", "csv"])
 
 if uploaded_file:
     try:
@@ -197,14 +204,17 @@ if uploaded_file:
             df['temp_addr'] = df[col_u].astype(str).str.upper() + df[col_m].astype(str).str.upper()
             df_clean = df.drop_duplicates(subset=['temp_addr']).copy()
             df_clean[col_m] = df_clean[col_m].apply(fix_polish); df_clean[col_u] = df_clean[col_u].apply(fix_polish)
-            st.info(f"📋 Baza zawiera **{len(df_clean)}** unikalnych aptek.")
+            st.info(f"📋 Baza: **{len(df_clean)}** punktów.")
 
-            if st.button("🚀 GENERUJ I ZAPISZ"):
+            if st.button("🚀 GENERUJ I SYNCHRONIZUJ Z CHMURĄ"):
                 coords = []
                 bar = st.progress(0); counter = st.empty()
-                geolocator = Nominatim(user_agent=f"A2B_v114_{random.randint(1,999)}", timeout=10)
+                geolocator = Nominatim(user_agent=f"A2B_v115_{random.randint(1,999)}", timeout=10)
                 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
-                home_loc = geolocator.geocode(dom_adres)
+                
+                # Używamy GPS jeśli jest, w przeciwnym razie adresu domowego
+                start_point = dom_adres
+                home_loc = geolocator.geocode(start_point)
                 if not home_loc: st.error("Błąd adresu startowego."); st.stop()
                 h_lat, h_lon = home_loc.latitude, home_loc.longitude
                 st.session_state.home_coords = (h_lat, h_lon)
@@ -239,14 +249,16 @@ if st.session_state.get('trasa_wynikowa') is not None:
     t1, t2 = st.tabs(["🗺️ Mapa Pracy", "📅 Harmonogram z Nawigacją"])
     with t1:
         m = folium.Map(location=[52.0, 19.0], zoom_start=6, tiles="cartodbpositron")
-        if st.session_state.get('home_coords'): folium.Marker(location=st.session_state.home_coords, icon=folium.Icon(color='red', icon='home')).add_to(m)
+        if st.session_state.get('home_coords'): folium.Marker(location=st.session_state.home_coords, icon=folium.Icon(color='red', icon='home'), popup="Twój Dom").add_to(m)
         for _, row in res.iterrows():
             color = DAILY_COLORS[all_dates.index(row['data_wizyty']) % len(DAILY_COLORS)]
-            folium.CircleMarker(location=[row['lat'], row['lon']], radius=10, color=color, fill=True, popup=f"{row['data_wizyty']}").add_to(m)
-        st_folium(m, width=1300, height=600, key="v114_map")
+            folium.CircleMarker(location=[row['lat'], row['lon']], radius=10, color=color, fill=True, popup=f"Data: {row['data_wizyty']}").add_to(m)
+        st_folium(m, width=1300, height=600, key="v115_map")
     with t2:
         for d in all_dates:
             day_pts = res[res['data_wizyty'] == d]
             with st.expander(f"📅 {d.strftime('%A, %d.%m.%Y')} — ({len(day_pts)} wizyt)"):
-                st.markdown(f'<a href="{create_gmaps_url(day_pts)}" target="_blank" class="maps-link">🚗 URUCHOM NAWIGACJĘ LIVE (Z OBECNEJ POZYCJI)</a>', unsafe_allow_html=True)
+                # Przycisk wykorzystujący GPS do startu trasy
+                gmaps_url = create_gmaps_url(day_pts, st.session_state.get('curr_gps'))
+                st.markdown(f'<a href="{gmaps_url}" target="_blank" class="maps-link">🚗 URUCHOM NAWIGACJĘ (START Z TWOJEJ LOKALIZACJI)</a>', unsafe_allow_html=True)
                 for _, p in day_pts.iterrows(): st.markdown(f"<div class='calendar-card'>📍 <b>{p['street']}</b>, {p['city']}</div>", unsafe_allow_html=True)
