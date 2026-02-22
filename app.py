@@ -48,7 +48,7 @@ st.markdown(f"""
 # --- INICJALIZACJA SESJI ---
 if 'nieobecnosci_daty' not in st.session_state: st.session_state.nieobecnosci_daty = []
 if 'trasa_wynikowa' not in st.session_state: st.session_state.trasa_wynikowa = None
-if 'home_coords' not in st.session_state: st.session_state.home_coords = None # POPRAWKA: Pamięć dla domu
+if 'home_coords' not in st.session_state: st.session_state.home_coords = None
 if 'current_file' not in st.session_state: st.session_state.current_file = None
 
 # --- FUNKCJE ---
@@ -127,21 +127,18 @@ if uploaded_file:
             
             st.info(f"📋 Apteki: **{n_punkty}**. Do celu: **{cel_wizyt}** wizyt. Tempo: **{tempo}**/dzień.")
 
-            if st.button("🚀 GENERUJ HARMONOGRAM (OD DOMU)"):
+            if st.button("🚀 GENERUJ OPTYMALNY HARMONOGRAM"):
                 coords = []
                 bar = st.progress(0); counter = st.empty()
                 
-                ua = f"A2B_Engine_v105_{random.randint(1,9999)}"
+                ua = f"A2B_Route_v106_{random.randint(1,9999)}"
                 geolocator = Nominatim(user_agent=ua, timeout=10)
                 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
                 
-                # Lokalizacja domu
                 home_loc = geolocator.geocode(dom_adres)
                 if not home_loc:
-                    st.error("Nie znaleziono adresu zamieszkania. Wpisz miasto w Sidebarze.")
+                    st.error("Nie znaleziono adresu zamieszkania.")
                     st.stop()
-                
-                # POPRAWKA: Zapisujemy współrzędne domu do sesji
                 st.session_state.home_coords = (home_loc.latitude, home_loc.longitude)
                 
                 total = len(df_clean)
@@ -153,28 +150,55 @@ if uploaded_file:
                     try:
                         loc = geocode(addr)
                         if loc:
-                            dist = geodesic(st.session_state.home_coords, (loc.latitude, loc.longitude)).km
                             coords.append({
                                 'lat': loc.latitude, 'lon': loc.longitude, 
-                                'dist': dist, 'addr': addr, 
-                                'city': row[col_m], 'street': row[col_u]
+                                'addr': addr, 'city': row[col_m], 'street': row[col_u]
                             })
                     except: pass
 
                 if coords:
-                    pdf = pd.DataFrame(coords)
-                    pdf = pdf.sort_values(by='dist', ascending=True).reset_index(drop=True)
-                    pdf['dzien_idx'] = pdf.index // tempo
-                    n_dni = int(pdf['dzien_idx'].max() + 1)
+                    # --- NOWY ALGORYTM: NEAREST NEIGHBOR PER DAY ---
+                    unvisited = coords.copy()
+                    planned_points = []
+                    current_day_idx = 0
                     
-                    working_dates = generate_working_dates(date.today(), n_dni, st.session_state.nieobecnosci_daty)
+                    while unvisited:
+                        # Zaczynamy dzień od szukania punktu najbliższego DOMU
+                        home = st.session_state.home_coords
+                        # Znajdź pierwszy punkt dnia (najbliższy domu)
+                        closest_to_home = min(unvisited, key=lambda x: geodesic(home, (x['lat'], x['lon'])).km)
+                        
+                        # Budujemy trasę na ten dzień (maksymalnie 'tempo' wizyt)
+                        current_pos = (closest_to_home['lat'], closest_to_home['lon'])
+                        day_route = []
+                        
+                        for _ in range(tempo):
+                            if not unvisited: break
+                            
+                            # Szukaj najbliższego sąsiada od aktualnej pozycji
+                            next_point = min(unvisited, key=lambda x: geodesic(current_pos, (x['lat'], x['lon'])).km)
+                            
+                            # Oblicz dystans od domu dla metryk
+                            dist_home = geodesic(home, (next_point['lat'], next_point['lon'])).km
+                            next_point['dist_home'] = dist_home
+                            next_point['dzien_idx'] = current_day_idx
+                            
+                            day_route.append(next_point)
+                            unvisited.remove(next_point)
+                            current_pos = (next_point['lat'], next_point['lon'])
+                        
+                        planned_points.extend(day_route)
+                        current_day_idx += 1
+                    
+                    pdf = pd.DataFrame(planned_points)
+                    working_dates = generate_working_dates(date.today(), current_day_idx, st.session_state.nieobecnosci_daty)
                     date_map = {i: working_dates[i] for i in range(len(working_dates))}
                     pdf['data_wizyty'] = pdf['dzien_idx'].map(date_map)
                     
                     st.session_state.trasa_wynikowa = pdf
                     st.rerun()
 
-            if st.session_state.trasa_wynikowa is not None and st.session_state.home_coords is not None:
+            if st.session_state.trasa_wynikowa is not None:
                 res = st.session_state.trasa_wynikowa
                 all_dates = sorted(res['data_wizyty'].unique())
                 
@@ -182,32 +206,28 @@ if uploaded_file:
                 
                 with t1:
                     m = folium.Map(location=[res['lat'].mean(), res['lon'].mean()], zoom_start=7, tiles="cartodbpositron")
-                    # POPRAWKA: Używamy współrzędnych z sesji
-                    folium.Marker(location=[st.session_state.home_coords[0], st.session_state.home_coords[1]], 
-                                  icon=folium.Icon(color='red', icon='home'), popup="Twój Dom").add_to(m)
-                    
+                    folium.Marker(location=st.session_state.home_coords, icon=folium.Icon(color='red', icon='home')).add_to(m)
                     for _, row in res.iterrows():
                         color = DAILY_COLORS[all_dates.index(row['data_wizyty']) % len(DAILY_COLORS)]
                         folium.CircleMarker(
                             location=[row['lat'], row['lon']], radius=10, color=color, fill=True, fill_color=color,
-                            popup=f"Data: {row['data_wizyty']}<br>Odległość: {round(row['dist'], 1)} km"
+                            popup=f"Data: {row['data_wizyty']}<br>Punkt w trasie"
                         ).add_to(m)
-                    st_folium(m, width=1300, height=600, key="fixed_map_v105")
+                    st_folium(m, width=1300, height=600, key="fixed_map_v106")
                 
                 with t2:
                     for d in all_dates:
                         day_pts = res[res['data_wizyty'] == d]
                         with st.expander(f"📅 {d.strftime('%A, %d.%m.%Y')} — ({len(day_pts)} wizyt)"):
                             for _, p in day_pts.iterrows():
-                                st.markdown(f"<div class='calendar-card'>📍 <b>{p['street']}</b>, {p['city']} ({round(p['dist'], 1)} km od domu)</div>", unsafe_allow_html=True)
+                                st.markdown(f"<div class='calendar-card'>📍 <b>{p['street']}</b>, {p['city']} ({round(p['dist_home'], 1)} km od domu)</div>", unsafe_allow_html=True)
                 
                 with t3:
                     out = io.BytesIO()
                     with pd.ExcelWriter(out, engine='openpyxl') as wr:
-                        res[['data_wizyty', 'street', 'city', 'dist', 'addr']].to_excel(wr, index=False, sheet_name='Plan_A2B')
-                    st.download_button(label="📥 POBIERZ PLAN (EXCEL)", data=out.getvalue(), file_name=f"Plan_A2B_{date.today()}.xlsx")
+                        res[['data_wizyty', 'street', 'city', 'addr']].to_excel(wr, index=False)
+                    st.download_button(label="📥 POBIERZ PLAN", data=out.getvalue(), file_name="Plan_A2B.xlsx")
         else:
             st.error("Brak kolumn adresowych.")
-            
     except Exception as e:
         st.error(f"Błąd: {e}")
