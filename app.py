@@ -48,6 +48,7 @@ st.markdown(f"""
 # --- INICJALIZACJA SESJI ---
 if 'nieobecnosci_daty' not in st.session_state: st.session_state.nieobecnosci_daty = []
 if 'trasa_wynikowa' not in st.session_state: st.session_state.trasa_wynikowa = None
+if 'home_coords' not in st.session_state: st.session_state.home_coords = None # POPRAWKA: Pamięć dla domu
 if 'current_file' not in st.session_state: st.session_state.current_file = None
 
 # --- FUNKCJE ---
@@ -93,6 +94,7 @@ with st.sidebar:
     if st.button("🗑️ RESETUJ WSZYSTKO"):
         st.session_state.nieobecnosci_daty = []
         st.session_state.trasa_wynikowa = None
+        st.session_state.home_coords = None
         st.rerun()
 
 # --- PANEL GŁÓWNY ---
@@ -129,7 +131,7 @@ if uploaded_file:
                 coords = []
                 bar = st.progress(0); counter = st.empty()
                 
-                ua = f"A2B_Engine_v104_{random.randint(1,9999)}"
+                ua = f"A2B_Engine_v105_{random.randint(1,9999)}"
                 geolocator = Nominatim(user_agent=ua, timeout=10)
                 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
                 
@@ -138,7 +140,9 @@ if uploaded_file:
                 if not home_loc:
                     st.error("Nie znaleziono adresu zamieszkania. Wpisz miasto w Sidebarze.")
                     st.stop()
-                home_coords = (home_loc.latitude, home_loc.longitude)
+                
+                # POPRAWKA: Zapisujemy współrzędne domu do sesji
+                st.session_state.home_coords = (home_loc.latitude, home_loc.longitude)
                 
                 total = len(df_clean)
                 for i, (_, row) in enumerate(df_clean.iterrows()):
@@ -149,7 +153,7 @@ if uploaded_file:
                     try:
                         loc = geocode(addr)
                         if loc:
-                            dist = geodesic(home_coords, (loc.latitude, loc.longitude)).km
+                            dist = geodesic(st.session_state.home_coords, (loc.latitude, loc.longitude)).km
                             coords.append({
                                 'lat': loc.latitude, 'lon': loc.longitude, 
                                 'dist': dist, 'addr': addr, 
@@ -159,10 +163,7 @@ if uploaded_file:
 
                 if coords:
                     pdf = pd.DataFrame(coords)
-                    # Sortowanie po dystansie od domu
                     pdf = pdf.sort_values(by='dist', ascending=True).reset_index(drop=True)
-                    
-                    # Sztywne paczki po 'tempo' wizyt
                     pdf['dzien_idx'] = pdf.index // tempo
                     n_dni = int(pdf['dzien_idx'].max() + 1)
                     
@@ -173,7 +174,7 @@ if uploaded_file:
                     st.session_state.trasa_wynikowa = pdf
                     st.rerun()
 
-            if st.session_state.trasa_wynikowa is not None:
+            if st.session_state.trasa_wynikowa is not None and st.session_state.home_coords is not None:
                 res = st.session_state.trasa_wynikowa
                 all_dates = sorted(res['data_wizyty'].unique())
                 
@@ -181,14 +182,17 @@ if uploaded_file:
                 
                 with t1:
                     m = folium.Map(location=[res['lat'].mean(), res['lon'].mean()], zoom_start=7, tiles="cartodbpositron")
-                    folium.Marker(location=[home_coords[0], home_coords[1]], icon=folium.Icon(color='red', icon='home')).add_to(m)
+                    # POPRAWKA: Używamy współrzędnych z sesji
+                    folium.Marker(location=[st.session_state.home_coords[0], st.session_state.home_coords[1]], 
+                                  icon=folium.Icon(color='red', icon='home'), popup="Twój Dom").add_to(m)
+                    
                     for _, row in res.iterrows():
                         color = DAILY_COLORS[all_dates.index(row['data_wizyty']) % len(DAILY_COLORS)]
                         folium.CircleMarker(
                             location=[row['lat'], row['lon']], radius=10, color=color, fill=True, fill_color=color,
                             popup=f"Data: {row['data_wizyty']}<br>Odległość: {round(row['dist'], 1)} km"
                         ).add_to(m)
-                    st_folium(m, width=1300, height=600, key="fixed_map_v104")
+                    st_folium(m, width=1300, height=600, key="fixed_map_v105")
                 
                 with t2:
                     for d in all_dates:
