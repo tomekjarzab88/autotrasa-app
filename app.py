@@ -8,17 +8,19 @@ from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.distance import geodesic
 from supabase import create_client, Client
+from streamlit_geolocation import streamlit_geolocation # NOWOŚĆ
 import time
 import random
 import re
 import io
 import math
 
-# --- 1. GLOBALNA INICJALIZACJA PAMIĘCI (ZAPOBIEGA BŁĘDOM ATTRIBUTEERROR) ---
+# --- 1. GLOBALNA INICJALIZACJA ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if 'user_id' not in st.session_state: st.session_state.user_id = None
 if 'trasa_wynikowa' not in st.session_state: st.session_state.trasa_wynikowa = None
 if 'home_coords' not in st.session_state: st.session_state.home_coords = None
+if 'nieobecnosci_daty' not in st.session_state: st.session_state.nieobecnosci_daty = []
 if 'db_loaded' not in st.session_state: st.session_state.db_loaded = False
 if 'home_address_saved' not in st.session_state: st.session_state.home_address_saved = "Kielce, Polska"
 
@@ -28,11 +30,11 @@ try:
     key = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(url, key)
 except Exception as e:
-    st.error("❌ Brak konfiguracji Secrets w Streamlit Cloud! Dodaj SUPABASE_URL i SUPABASE_KEY.")
+    st.error("❌ Błąd Secrets! Sprawdź SUPABASE_URL i SUPABASE_KEY.")
     st.stop()
 
 # --- 3. KONFIGURACJA STRONY ---
-st.set_page_config(page_title="A2B FlowRoute PRO v11.1", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="A2B FlowRoute PRO", layout="wide", initial_sidebar_state="expanded")
 
 COLOR_CYAN = "#00C2CB"
 COLOR_NAVY_DARK = "#1A2238"
@@ -47,7 +49,7 @@ st.markdown(f"""
     [data-testid="stSidebar"] {{ background-color: {COLOR_NAVY_DARK} !important; min-width: 260px !important; }}
     .stButton>button {{
         background: linear-gradient(135deg, {COLOR_CYAN} 0%, #00A0A8 100%) !important;
-        color: white !important; border-radius: 8px !important; font-weight: bold !important; width: 100%;
+        color: white !important; border-radius: 8px !important; font-weight: bold !important;
     }}
     .calendar-card {{
         background: rgba(255,255,255,0.05); border-left: 4px solid {COLOR_CYAN};
@@ -61,25 +63,24 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 4. FUNKCJE POMOCNICZE ---
-def save_plan_to_db(user_id, df, home_addr):
+# --- 4. FUNKCJE ---
+def save_plan_to_db(user_id, df, home_addr, blocked_dates):
     try:
         data = {
-            "user_id": user_id,
-            "route_json": df.to_json(),
-            "home_address": home_addr,
-            "updated_at": datetime.now().isoformat()
+            "user_id": user_id, 
+            "route_json": df.to_json(), 
+            "home_address": home_addr, 
+            "updated_at": datetime.now().isoformat(),
+            "blocked_dates": [d.isoformat() for d in blocked_dates] if blocked_dates else []
         }
         supabase.table("user_data").upsert(data).execute()
-    except Exception as e:
-        st.sidebar.error(f"⚠️ Błąd zapisu: {e}")
+    except Exception as e: st.sidebar.error(f"⚠️ Błąd zapisu: {e}")
 
 def load_plan_from_db(user_id):
     try:
         res = supabase.table("user_data").select("*").eq("user_id", user_id).execute()
         return res.data[0] if res.data else None
-    except:
-        return None
+    except: return None
 
 def fix_polish(text):
     if not isinstance(text, str): return ""
@@ -91,69 +92,95 @@ def generate_working_dates(start_from, count, blocked_dates):
     working_days = []
     curr = start_from + timedelta(days=1)
     while len(working_days) < count:
-        if curr.weekday() < 5 and curr not in blocked_dates:
-            working_days.append(curr)
+        if curr.weekday() < 5 and curr not in blocked_dates: working_days.append(curr)
         curr += timedelta(days=1)
     return working_days
 
-def create_gmaps_url(home_coords, day_points):
-    base_url = "https://www.google.com/maps/dir/"
-    origin = f"{home_coords[0]},{home_coords[1]}"
-    pts = "/".join([f"{p['lat']},{p['lon']}" for _, p in day_points.iterrows()])
-    return f"{base_url}{origin}/{pts}"
+# UDOSKONALONA FUNKCJA: Start z "My+Location"
+def create_gmaps_url(day_points):
+    """Tworzy link do Google Maps używając obecnej pozycji jako startu."""
+    # Używamy formatu https://www.google.com/maps/dir/?api=1 dla lepszej kompatybilności
+    base = "https://www.google.com/maps/dir/?api=1&origin=My+Location"
+    # Pobieramy punkty i łączymy je w format Google
+    dest = f"{day_points.iloc[-1]['lat']},{day_points.iloc[-1]['lon']}"
+    waypoints = "|".join([f"{p['lat']},{p['lon']}" for _, p in day_points.iloc[:-1].iterrows()])
+    return f"{base}&destination={dest}&waypoints={waypoints}"
 
-# --- 5. SYSTEM LOGOWANIA ---
+# --- 5. LOGOWANIE ---
 if not st.session_state.logged_in:
     st.title("🛡️ A2B FlowRoute PRO")
-    st.subheader("Zaloguj się do swojego konta")
-    
     col_login, _ = st.columns([1, 2])
     with col_login:
         u_id = st.text_input("ID Użytkownika")
         pwd = st.text_input("Hasło", type="password")
-        
         if st.button("Zaloguj"):
             if u_id == "a2b_admin" and pwd == "polska2025":
                 st.session_state.logged_in = True
                 st.session_state.user_id = u_id
                 st.rerun()
-            else:
-                st.error("Błędne dane logowania.")
+            else: st.error("Błędne dane.")
     st.stop()
 
-# --- 6. SYNCHRONIZACJA Z BAZĄ (TYLKO RAZ PO LOGOWANIU) ---
+# --- 6. DB LOAD ---
 if st.session_state.logged_in and not st.session_state.db_loaded:
     saved = load_plan_from_db(st.session_state.user_id)
     if saved:
         try:
             st.session_state.trasa_wynikowa = pd.read_json(saved['route_json'])
             st.session_state.home_address_saved = saved['home_address']
-        except:
-            pass
+            if 'blocked_dates' in saved:
+                st.session_state.nieobecnosci_daty = [date.fromisoformat(d) for d in saved['blocked_dates']]
+        except: pass
     st.session_state.db_loaded = True
 
 # --- 7. SIDEBAR ---
 with st.sidebar:
-    st.markdown(f"👤 **Użytkownik:** {st.session_state.user_id}")
-    if st.button("Wyloguj się"):
-        for key in list(st.session_state.keys()): del st.session_state[key]
-        st.rerun()
+    try: st.image("assets/logo_a2b.png", use_container_width=True)
+    except: st.markdown(f"<h2 style='color:{COLOR_CYAN}'>A2B FlowRoute</h2>", unsafe_allow_html=True)
+    
+    st.markdown(f"👤 **Witaj:** {st.session_state.user_id}")
+    
+    # NOWOŚĆ: AUTOMATYCZNA LOKALIZACJA
+    st.write("---")
+    st.write("📍 **Twój punkt startowy**")
+    location = streamlit_geolocation()
+    if location and location.get('latitude'):
+        curr_lat = location['latitude']
+        curr_lon = location['longitude']
+        st.session_state.home_address_saved = f"{curr_lat}, {curr_lon}"
+        st.success(f"Wykryto lokalizację: {round(curr_lat,3)}, {round(curr_lon,3)}")
+    
+    dom_adres = st.text_input("Adres startowy (miasto lub współrzędne):", st.session_state.home_address_saved)
     
     st.write("---")
-    dom_adres = st.text_input("📍 Twoje miejsce zamieszkania", st.session_state.home_address_saved)
-    
     typ_cyklu = st.selectbox("Długość cyklu", ["Miesiąc", "2 Miesiące", "Kwartał"])
     wizyty_cel = st.number_input("Wizyt na klienta", min_value=1, value=1)
     tempo = st.slider("Twoje tempo (wizyty/dzień)", 1, 30, 12)
     zrobione = st.number_input("Wizyty już wykonane", min_value=0, value=0)
     
-    if st.button("🗑️ WYCZYŚĆ OBECNY PLAN"):
+    st.write("---")
+    dni_input = st.date_input("Zaznacz wolne/urlop/L4:", value=(), min_value=date.today())
+    if st.button("➕ DODAJ DO KALENDARZA"):
+        if isinstance(dni_input, (list, tuple)) and len(dni_input) > 0:
+            if len(dni_input) == 2:
+                s, e = dni_input
+                range_dates = [s + timedelta(days=x) for x in range((e-s).days + 1)]
+                st.session_state.nieobecnosci_daty.extend(range_dates)
+            else: st.session_state.nieobecnosci_daty.append(dni_input[0])
+            st.session_state.nieobecnosci_daty = list(set(st.session_state.nieobecnosci_daty))
+            st.rerun()
+
+    if st.button("🗑️ RESETUJ WSZYSTKO"):
         st.session_state.trasa_wynikowa = None
+        st.session_state.nieobecnosci_daty = []
+        st.rerun()
+    
+    if st.button("Wyloguj"):
+        for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
 
 # --- 8. PANEL GŁÓWNY ---
-st.title("📅 Twój Inteligentny Kalendarz PRO")
-
+st.title("📅 Twój Inteligentny Kalendarz PRO v11.4")
 uploaded_file = st.file_uploader("📂 Wgraj bazę aptek (XLSX / CSV)", type=["xlsx", "csv"])
 
 if uploaded_file:
@@ -169,27 +196,23 @@ if uploaded_file:
         if col_m and col_u:
             df['temp_addr'] = df[col_u].astype(str).str.upper() + df[col_m].astype(str).str.upper()
             df_clean = df.drop_duplicates(subset=['temp_addr']).copy()
-            df_clean[col_m] = df_clean[col_m].apply(fix_polish)
-            df_clean[col_u] = df_clean[col_u].apply(fix_polish)
-            
+            df_clean[col_m] = df_clean[col_m].apply(fix_polish); df_clean[col_u] = df_clean[col_u].apply(fix_polish)
             st.info(f"📋 Baza zawiera **{len(df_clean)}** unikalnych aptek.")
 
-            if st.button("🚀 GENERUJ NOWY PLAN I ZAPISZ W CHMURZE"):
+            if st.button("🚀 GENERUJ I ZAPISZ"):
                 coords = []
                 bar = st.progress(0); counter = st.empty()
-                geolocator = Nominatim(user_agent=f"A2B_v111_{random.randint(1,999)}", timeout=10)
+                geolocator = Nominatim(user_agent=f"A2B_v114_{random.randint(1,999)}", timeout=10)
                 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
-                
                 home_loc = geolocator.geocode(dom_adres)
-                if not home_loc: st.error("Błąd lokalizacji domu."); st.stop()
+                if not home_loc: st.error("Błąd adresu startowego."); st.stop()
                 h_lat, h_lon = home_loc.latitude, home_loc.longitude
                 st.session_state.home_coords = (h_lat, h_lon)
                 
                 total = len(df_clean)
                 for i, (_, row) in enumerate(df_clean.iterrows()):
                     addr = f"{row[col_u]}, {row[col_m]}, Polska"
-                    bar.progress((i + 1) / total)
-                    counter.markdown(f"#### 📍 Geolokalizacja: **{i+1}** / **{total}**")
+                    bar.progress((i + 1) / total); counter.markdown(f"#### 📍 Geolokalizacja: **{i+1}** / **{total}**")
                     try:
                         loc = geocode(addr)
                         if loc:
@@ -202,40 +225,28 @@ if uploaded_file:
                     pdf = pd.DataFrame(coords)
                     pdf = pdf.sort_values(by=['angle', 'dist'], ascending=[True, True]).reset_index(drop=True)
                     pdf['dzien_idx'] = pdf.index // tempo
-                    working_dates = generate_working_dates(date.today(), int(pdf['dzien_idx'].max() + 1), [])
+                    working_dates = generate_working_dates(date.today(), int(pdf['dzien_idx'].max() + 1), st.session_state.nieobecnosci_daty)
                     pdf['data_wizyty'] = pdf['dzien_idx'].map({i: working_dates[i] for i in range(len(working_dates))})
-                    
                     st.session_state.trasa_wynikowa = pdf
-                    save_plan_to_db(st.session_state.user_id, pdf, dom_adres)
-                    st.success("☁️ Trasa zsynchronizowana z bazą danych!")
+                    save_plan_to_db(st.session_state.user_id, pdf, dom_adres, st.session_state.nieobecnosci_daty)
                     st.rerun()
-    except Exception as e: st.error(f"Błąd przetwarzania: {e}")
+    except Exception as e: st.error(f"Błąd: {e}")
 
-# --- 9. WIZUALIZACJA (TYLKO JEŚLI DANE ISTNIEJĄ) ---
+# --- 9. WIZUALIZACJA ---
 if st.session_state.get('trasa_wynikowa') is not None:
     res = st.session_state.trasa_wynikowa
     all_dates = sorted(res['data_wizyty'].unique())
-    
     t1, t2 = st.tabs(["🗺️ Mapa Pracy", "📅 Harmonogram z Nawigacją"])
-    
     with t1:
         m = folium.Map(location=[52.0, 19.0], zoom_start=6, tiles="cartodbpositron")
-        # Jeśli mamy współrzędne domu, dodaj pinezkę
-        if st.session_state.get('home_coords'):
-            folium.Marker(location=st.session_state.home_coords, icon=folium.Icon(color='red', icon='home')).add_to(m)
-            
+        if st.session_state.get('home_coords'): folium.Marker(location=st.session_state.home_coords, icon=folium.Icon(color='red', icon='home')).add_to(m)
         for _, row in res.iterrows():
             color = DAILY_COLORS[all_dates.index(row['data_wizyty']) % len(DAILY_COLORS)]
             folium.CircleMarker(location=[row['lat'], row['lon']], radius=10, color=color, fill=True, popup=f"{row['data_wizyty']}").add_to(m)
-        st_folium(m, width=1300, height=600, key="main_map")
-    
+        st_folium(m, width=1300, height=600, key="v114_map")
     with t2:
         for d in all_dates:
             day_pts = res[res['data_wizyty'] == d]
             with st.expander(f"📅 {d.strftime('%A, %d.%m.%Y')} — ({len(day_pts)} wizyt)"):
-                # Próba uzyskania home_coords do nawigacji
-                h_c = st.session_state.get('home_coords', (50.87, 20.63))
-                gmaps_url = create_gmaps_url(h_c, day_pts)
-                st.markdown(f'<a href="{gmaps_url}" target="_blank" class="maps-link">🚗 URUCHOM NAWIGACJĘ GOOGLE MAPS</a>', unsafe_allow_html=True)
-                for _, p in day_pts.iterrows():
-                    st.markdown(f"<div class='calendar-card'>📍 <b>{p['street']}</b>, {p['city']}</div>", unsafe_allow_html=True)
+                st.markdown(f'<a href="{create_gmaps_url(day_pts)}" target="_blank" class="maps-link">🚗 URUCHOM NAWIGACJĘ LIVE (Z OBECNEJ POZYCJI)</a>', unsafe_allow_html=True)
+                for _, p in day_pts.iterrows(): st.markdown(f"<div class='calendar-card'>📍 <b>{p['street']}</b>, {p['city']}</div>", unsafe_allow_html=True)
