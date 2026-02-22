@@ -2,23 +2,30 @@ import streamlit as st
 import pandas as pd
 import chardet
 from datetime import datetime, date, timedelta
-import plotly.graph_objects as go
-from streamlit_folium import st_folium
 import folium
+from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.distance import geodesic
+from supabase import create_client, Client
 import time
 import random
 import re
-import numpy as np
 import io
 import math
 
-# --- KONFIGURACJA ---
+# --- KONFIGURACJA SUPABASE (Z SECRETS) ---
+try:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    supabase: Client = create_client(url, key)
+except Exception as e:
+    st.error("Błąd konfiguracji bazy danych. Sprawdź 'Secrets' w Streamlit Cloud.")
+    st.stop()
+
+# --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="A2B FlowRoute PRO", layout="wide", initial_sidebar_state="expanded")
 
-# --- KOLORYSTYKA ---
 COLOR_CYAN = "#00C2CB"
 COLOR_NAVY_DARK = "#1A2238"
 COLOR_BG = "#1F293D"
@@ -30,11 +37,6 @@ st.markdown(f"""
     html, body, [class*="css"] {{ font-family: 'Inter', sans-serif; background-color: {COLOR_BG}; color: white; }}
     .stApp {{ background-color: {COLOR_BG}; color: white; }}
     [data-testid="stSidebar"] {{ background-color: {COLOR_NAVY_DARK} !important; min-width: 260px !important; }}
-    div[data-testid="stMetric"] {{
-        background-color: white; border-radius: 12px; padding: 15px !important;
-        border-left: 5px solid {COLOR_CYAN}; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-    }}
-    div[data-testid="stMetricValue"] {{ color: {COLOR_NAVY_DARK} !important; font-size: 1.6rem !important; }}
     .stButton>button {{
         background: linear-gradient(135deg, {COLOR_CYAN} 0%, #00A0A8 100%) !important;
         color: white !important; border-radius: 8px !important; font-weight: bold !important; width: 100%;
@@ -43,16 +45,35 @@ st.markdown(f"""
         background: rgba(255,255,255,0.05); border-left: 4px solid {COLOR_CYAN};
         padding: 10px; margin-bottom: 5px; border-radius: 5px;
     }}
+    .maps-link {{
+        display: inline-block; padding: 10px 20px; background-color: #4285F4;
+        color: white !important; text-decoration: none; border-radius: 5px;
+        font-weight: bold; margin-bottom: 15px; text-align: center; width: 100%;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
-# --- INICJALIZACJA SESJI ---
-if 'nieobecnosci_daty' not in st.session_state: st.session_state.nieobecnosci_daty = []
-if 'trasa_wynikowa' not in st.session_state: st.session_state.trasa_wynikowa = None
-if 'home_coords' not in st.session_state: st.session_state.home_coords = None
-if 'current_file' not in st.session_state: st.session_state.current_file = None
+# --- FUNKCJE BAZY DANYCH ---
+def save_plan_to_db(user_id, df, home_addr):
+    try:
+        data = {
+            "user_id": user_id,
+            "route_json": df.to_json(),
+            "home_address": home_addr,
+            "updated_at": datetime.now().isoformat()
+        }
+        supabase.table("user_data").upsert(data).execute()
+    except Exception as e:
+        st.sidebar.error(f"Nie udało się zapisać w chmurze: {e}")
 
-# --- FUNKCJE ---
+def load_plan_from_db(user_id):
+    try:
+        res = supabase.table("user_data").select("*").eq("user_id", user_id).execute()
+        return res.data[0] if res.data else None
+    except:
+        return None
+
+# --- FUNKCJE LOGISTYCZNE ---
 def fix_polish(text):
     if not isinstance(text, str): return ""
     rep = {'GÛ': 'Gó', 'Û': 'ó', 'Ã³': 'ó', 'Ä…': 'ą', 'Ä™': 'ę', 'Å›': 'ś', 'Ä‡': 'ć', 'Åº': 'ź', 'Å¼': 'ż', 'Å‚': 'ł', 'Å„': 'ń'}
@@ -68,148 +89,142 @@ def generate_working_dates(start_from, count, blocked_dates):
         curr += timedelta(days=1)
     return working_days
 
-# --- SIDEBAR ---
+def create_gmaps_url(home_coords, day_points):
+    base_url = "https://www.google.com/maps/dir/"
+    origin = f"{home_coords[0]},{home_coords[1]}"
+    pts = "/".join([f"{p['lat']},{p['lon']}" for _, p in day_points.iterrows()])
+    return f"{base_url}{origin}/{pts}"
+
+# --- SYSTEM LOGOWANIA ---
+if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    st.title("🛡️ A2B FlowRoute PRO")
+    st.subheader("Zaloguj się, aby uzyskać dostęp do swoich tras")
+    
+    col_login, _ = st.columns([1, 2])
+    with col_login:
+        user_id = st.text_input("ID Użytkownika")
+        password = st.text_input("Hasło", type="password")
+        
+        if st.button("Zaloguj"):
+            if user_id == "a2b_admin" and password == "polska2025": # Przykładowe dane
+                st.session_state.logged_in = True
+                st.session_state.user_id = user_id
+                st.rerun()
+            else:
+                st.error("Błędne dane logowania.")
+    st.stop()
+
+# --- ZAŁADOWANIE DANYCH Z BAZY PO LOGOWANIU ---
+if 'db_loaded' not in st.session_state:
+    saved = load_plan_from_db(st.session_state.user_id)
+    if saved:
+        st.session_state.trasa_wynikowa = pd.read_json(saved['route_json'])
+        st.session_state.home_address_saved = saved['home_address']
+    st.session_state.db_loaded = True
+
+# --- GŁÓWNA APLIKACJA ---
 with st.sidebar:
-    try: st.image("assets/logo_a2b.png", use_container_width=True)
-    except: st.markdown(f"<h2 style='color:{COLOR_CYAN}'>A2B FlowRoute</h2>", unsafe_allow_html=True)
+    st.markdown(f"👤 **Użytkownik:** {st.session_state.user_id}")
+    if st.button("Wyloguj"):
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.rerun()
     
     st.write("---")
-    dom_adres = st.text_input("📍 Twój punkt startowy", "Kielce, Polska")
+    dom_default = getattr(st.session_state, 'home_address_saved', "Kielce, Polska")
+    dom_adres = st.text_input("📍 Twoje miejsce zamieszkania", dom_default)
+    
     typ_cyklu = st.selectbox("Długość cyklu", ["Miesiąc", "2 Miesiące", "Kwartał"])
     wizyty_cel = st.number_input("Wizyt na klienta", min_value=1, value=1)
     tempo = st.slider("Twoje tempo (wizyty/dzień)", 1, 30, 12)
     zrobione = st.number_input("Wizyty już wykonane", min_value=0, value=0)
     
-    st.write("---")
-    dni_input = st.date_input("Zaznacz wolne/urlop:", value=(), min_value=date.today())
-    if st.button("➕ DODAJ WOLNE"):
-        if isinstance(dni_input, (list, tuple)) and len(dni_input) > 0:
-            if len(dni_input) == 2:
-                s, e = dni_input
-                range_dates = [s + timedelta(days=x) for x in range((e-s).days + 1)]
-                st.session_state.nieobecnosci_daty.extend(range_dates)
-            else: st.session_state.nieobecnosci_daty.append(dni_input[0])
-            st.session_state.nieobecnosci_daty = list(set(st.session_state.nieobecnosci_daty))
-            st.rerun()
-
-    if st.button("🗑️ RESETUJ WSZYSTKO"):
-        st.session_state.nieobecnosci_daty = []
+    if st.button("🗑️ RESETUJ PLAN"):
         st.session_state.trasa_wynikowa = None
-        st.session_state.home_coords = None
         st.rerun()
 
 # --- PANEL GŁÓWNY ---
-st.title("📅 Kalendarz Trasy Optymalnej v10.7")
+st.title("📅 Twój Inteligentny Kalendarz PRO")
 
-uploaded_file = st.file_uploader("📂 Wgraj bazę (Excel lub CSV)", type=["csv", "xlsx", "xls"])
+uploaded_file = st.file_uploader("📂 Wgraj nową bazę aptek", type=["xlsx", "csv"])
 
 if uploaded_file:
-    if st.session_state.current_file != uploaded_file.name:
-        st.session_state.trasa_wynikowa = None
-        st.session_state.current_file = uploaded_file.name
-
     try:
         if uploaded_file.name.endswith('.csv'):
             raw = uploaded_file.read(); det = chardet.detect(raw); uploaded_file.seek(0)
             df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=det['encoding'] if det['confidence'] > 0.5 else 'utf-8-sig')
-        else: 
-            df = pd.read_excel(uploaded_file)
+        else: df = pd.read_excel(uploaded_file)
         
         col_m = next((c for c in df.columns if 'miasto' in c.lower() or 'miejscowość' in c.lower()), None)
         col_u = next((c for c in df.columns if 'ulica' in c.lower() or 'adres' in c.lower()), None)
 
         if col_m and col_u:
-            # Poprawione czyszczenie dubli (case-insensitive)
             df['temp_addr'] = df[col_u].astype(str).str.upper() + df[col_m].astype(str).str.upper()
             df_clean = df.drop_duplicates(subset=['temp_addr']).copy()
             df_clean[col_m] = df_clean[col_m].apply(fix_polish)
             df_clean[col_u] = df_clean[col_u].apply(fix_polish)
             
-            cel_wizyt = (len(df_clean) * wizyty_cel) - zrobione
-            
-            st.info(f"📋 Apteki unikalne: **{len(df_clean)}**. Tempo: **{tempo}**/dzień.")
+            st.info(f"📋 Znaleziono **{len(df_clean)}** unikalnych aptek.")
 
-            if st.button("🚀 GENERUJ SEKTOROWY HARMONOGRAM"):
+            if st.button("🚀 GENERUJ I ZAPISZ W CHMURZE"):
                 coords = []
                 bar = st.progress(0); counter = st.empty()
-                
-                ua = f"A2B_Radial_v107_{random.randint(1,9999)}"
-                geolocator = Nominatim(user_agent=ua, timeout=10)
+                geolocator = Nominatim(user_agent=f"A2B_PRO_{random.randint(1,999)}", timeout=10)
                 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
                 
                 home_loc = geolocator.geocode(dom_adres)
-                if not home_loc:
-                    st.error("Błąd lokalizacji domu.")
-                    st.stop()
-                st.session_state.home_coords = (home_loc.latitude, home_loc.longitude)
-                h_lat, h_lon = st.session_state.home_coords
+                if not home_loc: st.error("Błąd adresu startowego."); st.stop()
+                h_lat, h_lon = home_loc.latitude, home_loc.longitude
+                st.session_state.home_coords = (h_lat, h_lon)
                 
                 total = len(df_clean)
                 for i, (_, row) in enumerate(df_clean.iterrows()):
                     addr = f"{row[col_u]}, {row[col_m]}, Polska"
                     bar.progress((i + 1) / total)
                     counter.markdown(f"#### 📍 Geolokalizacja: **{i+1}** / **{total}**")
-                    
                     try:
                         loc = geocode(addr)
                         if loc:
-                            # Obliczanie kąta względem domu (Radial)
-                            # atan2(y, x) daje kąt w radianach
                             angle = math.atan2(loc.latitude - h_lat, loc.longitude - h_lon)
                             dist = geodesic((h_lat, h_lon), (loc.latitude, loc.longitude)).km
-                            coords.append({
-                                'lat': loc.latitude, 'lon': loc.longitude, 
-                                'angle': angle, 'dist': dist, 'addr': addr, 
-                                'city': row[col_m], 'street': row[col_u]
-                            })
+                            coords.append({'lat': loc.latitude, 'lon': loc.longitude, 'angle': angle, 'dist': dist, 'addr': addr, 'city': row[col_m], 'street': row[col_u]})
                     except: pass
 
                 if coords:
-                    # NOWA LOGIKA: Sortowanie po kącie (Sektory), a potem po dystansie
-                    # To grupuje apteki w "kliny" wychodzące z Kielc
                     pdf = pd.DataFrame(coords)
                     pdf = pdf.sort_values(by=['angle', 'dist'], ascending=[True, True]).reset_index(drop=True)
-                    
                     pdf['dzien_idx'] = pdf.index // tempo
-                    n_dni = int(pdf['dzien_idx'].max() + 1)
-                    
-                    working_dates = generate_working_dates(date.today(), n_dni, st.session_state.nieobecnosci_daty)
-                    date_map = {i: working_dates[i] for i in range(len(working_dates))}
-                    pdf['data_wizyty'] = pdf['dzien_idx'].map(date_map)
+                    working_dates = generate_working_dates(date.today(), int(pdf['dzien_idx'].max() + 1), [])
+                    pdf['data_wizyty'] = pdf['dzien_idx'].map({i: working_dates[i] for i in range(len(working_dates))})
                     
                     st.session_state.trasa_wynikowa = pdf
+                    save_plan_to_db(st.session_state.user_id, pdf, dom_adres)
+                    st.success("✅ Trasa zapisana w Twojej chmurze!")
                     st.rerun()
+    except Exception as e: st.error(f"Błąd pliku: {e}")
 
-            if st.session_state.trasa_wynikowa is not None:
-                res = st.session_state.trasa_wynikowa
-                all_dates = sorted(res['data_wizyty'].unique())
-                
-                t1, t2, t3 = st.tabs(["🗺️ Mapa Sektorowa", "📅 Harmonogram", "📥 Eksport"])
-                
-                with t1:
-                    m = folium.Map(location=[res['lat'].mean(), res['lon'].mean()], zoom_start=7, tiles="cartodbpositron")
-                    folium.Marker(location=st.session_state.home_coords, icon=folium.Icon(color='red', icon='home')).add_to(m)
-                    for _, row in res.iterrows():
-                        color = DAILY_COLORS[all_dates.index(row['data_wizyty']) % len(DAILY_COLORS)]
-                        folium.CircleMarker(
-                            location=[row['lat'], row['lon']], radius=10, color=color, fill=True, fill_color=color,
-                            popup=f"Data: {row['data_wizyty']}<br>Kierunek: {round(math.degrees(row['angle']),0)}°"
-                        ).add_to(m)
-                    st_folium(m, width=1300, height=600, key="fixed_map_v107")
-                
-                with t2:
-                    for d in all_dates:
-                        day_pts = res[res['data_wizyty'] == d]
-                        with st.expander(f"📅 {d.strftime('%A, %d.%m.%Y')} — ({len(day_pts)} wizyt)"):
-                            for _, p in day_pts.iterrows():
-                                st.markdown(f"<div class='calendar-card'>📍 <b>{p['street']}</b>, {p['city']} ({round(p['dist'], 1)} km)</div>", unsafe_allow_html=True)
-                
-                with t3:
-                    out = io.BytesIO()
-                    with pd.ExcelWriter(out, engine='openpyxl') as wr:
-                        res[['data_wizyty', 'street', 'city', 'dist', 'addr']].to_excel(wr, index=False)
-                    st.download_button(label="📥 POBIERZ PLAN", data=out.getvalue(), file_name="Plan_A2B_v107.xlsx")
-        else:
-            st.error("Brak kolumn adresowych.")
-    except Exception as e:
-        st.error(f"Błąd: {e}")
+# --- WYŚWIETLANIE ZAPISANYCH DANYCH ---
+if st.session_state.trasa_wynikowa is not None:
+    res = st.session_state.trasa_wynikowa
+    all_dates = sorted(res['data_wizyty'].unique())
+    
+    t1, t2 = st.tabs(["🗺️ Mapa Pracy", "📅 Harmonogram z Nawigacją"])
+    
+    with t1:
+        m = folium.Map(location=[52.0, 19.0], zoom_start=6, tiles="cartodbpositron")
+        for _, row in res.iterrows():
+            color = DAILY_COLORS[all_dates.index(row['data_wizyty']) % len(DAILY_COLORS)]
+            folium.CircleMarker(location=[row['lat'], row['lon']], radius=10, color=color, fill=True, popup=f"{row['data_wizyty']}").add_to(m)
+        st_folium(m, width=1300, height=600)
+    
+    with t2:
+        for d in all_dates:
+            day_pts = res[res['data_wizyty'] == d]
+            with st.expander(f"📅 {d.strftime('%A, %d.%m.%Y')} — ({len(day_pts)} wizyt)"):
+                # Przycisk nawigacji (wymaga home_coords, jeśli nie ma w sesji, próbujemy wyliczyć średnią rejonu)
+                h_c = getattr(st.session_state, 'home_coords', (50.87, 20.63)) 
+                gmaps_url = create_gmaps_url(h_c, day_pts)
+                st.markdown(f'<a href="{gmaps_url}" target="_blank" class="maps-link">🚗 NAWIGUJ CAŁĄ TRASĘ</a>', unsafe_allow_html=True)
+                for _, p in day_pts.iterrows():
+                    st.markdown(f"<div class='calendar-card'>📍 <b>{p['street']}</b>, {p['city']}</div>", unsafe_allow_html=True)
